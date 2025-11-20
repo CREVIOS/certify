@@ -1,0 +1,5 @@
+{
+  "name": "CertifyAI - IPO Verification",
+  "description": "An intelligent document verification platform for IPO prospectuses. Verifies claims against supporting documents using Gemini AI with real-time citation tracking.",
+  "requestFramePermissions": []
+}
