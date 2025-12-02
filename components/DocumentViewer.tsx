@@ -1,11 +1,12 @@
 
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { IPODocument, VerifiedSentence, VerificationStatus } from '../types';
-import * as pdfjsLib from 'pdfjs-dist/build/pdf';
+import * as pdfjsLib from 'pdfjs-dist';
+import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { ZoomIn, ZoomOut, Loader2, ChevronLeft, ChevronRight, FileText, Maximize2, CheckCircle2, AlertTriangle, XCircle, HelpCircle } from 'lucide-react';
 
-// Set worker source
-pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.worker.min.mjs';
+// Set worker source for pdfjs-dist v5 using local worker
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
 interface DocumentViewerProps {
   doc: IPODocument;

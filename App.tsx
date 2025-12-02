@@ -4,11 +4,14 @@ import { SupportingDocument, IPODocument, VerificationStatus } from './types';
 import LeftSidebar from './components/LeftSidebar';
 import RightSidebar from './components/RightSidebar';
 import DocumentViewer from './components/DocumentViewer';
+import AuditPanel from './components/AuditPanel';
 import { indexSingleDocument, analyzeIPODocumentRAG } from './services/geminiService';
 import { downloadVerificationReport } from './utils/exportUtils';
 import { segmentTextIntoSentences } from './utils/textParsing';
 import { extractTextFromPDF } from './utils/pdfHelpers';
-import { ShieldCheck, Download, Loader2, FileUp, UploadCloud, Sparkles, Menu, PanelLeftClose, PanelLeftOpen, LayoutTemplate } from 'lucide-react';
+import { ShieldCheck, Download, Loader2, FileUp, UploadCloud, Sparkles, Menu, PanelLeftClose, PanelLeftOpen, LayoutTemplate, FileText, ClipboardCheck } from 'lucide-react';
+
+type ViewMode = 'pdf' | 'audit';
 
 const App: React.FC = () => {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -18,6 +21,7 @@ const App: React.FC = () => {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [isMobile, setIsMobile] = useState(false);
   const [dragActive, setDragActive] = useState(false);
+  const [viewMode, setViewMode] = useState<ViewMode>('pdf');
   
   const [supportingDocs, setSupportingDocs] = useState<SupportingDocument[]>([]);
   const [ipoDoc, setIpoDoc] = useState<IPODocument | null>(null);
@@ -59,9 +63,12 @@ const App: React.FC = () => {
       });
       
       setActiveSentenceId(null);
+      // Reset to PDF view when loading new document
+      setViewMode('pdf');
     } catch (err) {
-      console.error(err);
-      alert("Error reading file. Please ensure it is a valid text-based PDF.");
+      console.error("PDF processing error:", err);
+      const errorMessage = err instanceof Error ? err.message : "Error reading file. Please ensure it is a valid text-based PDF.";
+      alert(errorMessage);
     } finally {
       setIsParsing(false);
     }
@@ -151,6 +158,9 @@ const App: React.FC = () => {
       if (verifiedSentences.length > 0) {
         setActiveSentenceId(0);
       }
+      
+      // Auto-switch to audit view after analysis completes
+      setViewMode('audit');
     } catch (error) {
       console.error("Error verifying document:", error);
       alert("Failed to verify document. Check console or API Key.");
@@ -246,6 +256,34 @@ const App: React.FC = () => {
            <div className="flex items-center gap-2">
             {ipoDoc && (
               <>
+                {/* View Mode Toggle */}
+                <div className="flex items-center bg-slate-100 rounded-lg p-0.5 mr-2">
+                  <button 
+                    onClick={() => setViewMode('pdf')}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+                      viewMode === 'pdf' 
+                        ? 'bg-white text-slate-900 shadow-sm' 
+                        : 'text-slate-500 hover:text-slate-700'
+                    }`}
+                  >
+                    <FileText className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline">PDF</span>
+                  </button>
+                  <button 
+                    onClick={() => setViewMode('audit')}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+                      viewMode === 'audit' 
+                        ? 'bg-white text-indigo-600 shadow-sm' 
+                        : 'text-slate-500 hover:text-slate-700'
+                    }`}
+                  >
+                    <ClipboardCheck className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline">Audit</span>
+                  </button>
+                </div>
+
+                <div className="w-px h-4 bg-slate-200 mx-1 hidden md:block"></div>
+
                 <button 
                   onClick={() => mainDocInputRef.current?.click()}
                   className="hidden md:flex items-center gap-2 px-3 py-1.5 text-xs font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-md transition-all"
@@ -321,14 +359,25 @@ const App: React.FC = () => {
         )}
 
         {/* Center Content */}
-        <div className="flex-1 h-full relative min-w-0 bg-slate-50/50 bg-dot-pattern flex flex-col transition-all duration-300">
+        <div className={`h-full relative min-w-0 bg-slate-50/50 bg-dot-pattern flex flex-col transition-all duration-300 ${viewMode === 'audit' ? 'flex-1' : 'flex-1'}`}>
            {ipoDoc ? (
-             <DocumentViewer 
-               doc={ipoDoc} 
-               onSentenceClick={(s) => setActiveSentenceId(s.id)}
-               activeSentenceId={activeSentenceId}
-               isAnalyzing={isAnalyzing}
-             />
+             viewMode === 'pdf' ? (
+               <DocumentViewer 
+                 doc={ipoDoc} 
+                 onSentenceClick={(s) => setActiveSentenceId(s.id)}
+                 activeSentenceId={activeSentenceId}
+                 isAnalyzing={isAnalyzing}
+               />
+             ) : (
+               <AuditPanel 
+                 sentences={ipoDoc.sentences}
+                 documents={supportingDocs}
+                 activeSentenceId={activeSentenceId}
+                 onSentenceClick={(s) => setActiveSentenceId(s.id)}
+                 onApprove={handleApprove}
+                 onReject={handleReject}
+               />
+             )
            ) : (
              <div 
                className={`h-full flex flex-col items-center justify-center p-8 transition-colors duration-300 ${dragActive ? 'bg-indigo-50/80' : ''}`}
@@ -386,33 +435,35 @@ const App: React.FC = () => {
            )}
         </div>
 
-        {/* Right Sidebar */}
-        <div 
-          className={`
-            fixed inset-y-0 right-0 pt-14 z-30 bg-white transition-transform duration-300 ease-in-out
-            w-[340px] shadow-2xl lg:shadow-none
-            ${(activeSentenceId !== null || (!isMobile && ipoDoc)) ? 'translate-x-0' : 'translate-x-full'}
-            lg:relative lg:translate-x-0 lg:flex lg:flex-col
-            ${!ipoDoc && 'lg:hidden'}
-          `}
-        >
-           {/* Mobile Close */}
-           {isMobile && activeSentenceId !== null && (
-             <button 
-               onClick={() => setActiveSentenceId(null)}
-               className="absolute top-16 left-4 z-50 p-2 bg-white rounded-full shadow-lg border border-slate-100 text-slate-500"
-             >
-               <PanelLeftClose className="w-5 h-5 rotate-180" />
-             </button>
-           )}
+        {/* Right Sidebar - Only visible in PDF view mode */}
+        {viewMode === 'pdf' && (
+          <div 
+            className={`
+              fixed inset-y-0 right-0 pt-14 z-30 bg-white transition-transform duration-300 ease-in-out
+              w-[340px] shadow-2xl lg:shadow-none
+              ${(activeSentenceId !== null || (!isMobile && ipoDoc)) ? 'translate-x-0' : 'translate-x-full'}
+              lg:relative lg:translate-x-0 lg:flex lg:flex-col
+              ${!ipoDoc && 'lg:hidden'}
+            `}
+          >
+             {/* Mobile Close */}
+             {isMobile && activeSentenceId !== null && (
+               <button 
+                 onClick={() => setActiveSentenceId(null)}
+                 className="absolute top-16 left-4 z-50 p-2 bg-white rounded-full shadow-lg border border-slate-100 text-slate-500"
+               >
+                 <PanelLeftClose className="w-5 h-5 rotate-180" />
+               </button>
+             )}
 
-          <RightSidebar 
-            activeSentence={activeSentence}
-            documents={supportingDocs}
-            onApprove={handleApprove}
-            onReject={handleReject}
-          />
-        </div>
+            <RightSidebar 
+              activeSentence={activeSentence}
+              documents={supportingDocs}
+              onApprove={handleApprove}
+              onReject={handleReject}
+            />
+          </div>
+        )}
       </div>
     </div>
   );
