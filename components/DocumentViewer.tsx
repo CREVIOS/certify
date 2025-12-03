@@ -218,7 +218,7 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
   return (
     <div className="h-full flex flex-col bg-slate-50/50 bg-dot-pattern relative group">
       {/* Dynamic Island Toolbar */}
-      <div className="absolute top-6 left-1/2 -translate-x-1/2 z-40 transition-all duration-300 hover:-translate-y-1">
+      <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-40 transition-all duration-300 hover:translate-y-1">
         <div className="bg-slate-900/90 backdrop-blur-xl text-white px-1.5 py-1.5 rounded-full flex items-center gap-4 shadow-2xl border border-white/10 ring-1 ring-black/20">
            
            <div className="flex items-center gap-2 pl-3 pr-2">

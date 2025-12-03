@@ -9,15 +9,19 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "react": "^19.2.0",
-    "lucide-react": "^0.554.0",
     "@google/genai": "^1.30.0",
-    "react-dom": "^19.2.0",
-    "pdfjs-dist": "^5.4.394",
-    "weaviate-ts-client": "^2.2.0",
+    "@radix-ui/react-slot": "^1.2.4",
+    "bullmq": "^5.63.2",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
     "langchain": "^1.0.5",
+    "lucide-react": "^0.554.0",
     "p-limit": "^7.2.0",
-    "bullmq": "^5.63.2"
+    "pdfjs-dist": "^5.4.394",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "tailwind-merge": "^3.4.0",
+    "weaviate-ts-client": "^2.2.0"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",
