@@ -36,6 +36,7 @@ const AuditTable: React.FC<AuditTableProps> = ({
 
   const statusDropdownRefs = useRef<Record<number, HTMLDivElement | null>>({});
   const sourceDropdownRefs = useRef<Record<number, HTMLDivElement | null>>({});
+  const scrollWrapperRef = useRef<HTMLDivElement | null>(null);
 
   const filteredSentences = useMemo(() => {
     if (filter === 'all') return sentences;
@@ -126,6 +127,24 @@ const AuditTable: React.FC<AuditTableProps> = ({
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [openStatusDropdown, openSourceDropdown]);
+
+  // Ensure scrollbar stays visible after navigation
+  useEffect(() => {
+    const wrapper = scrollWrapperRef.current;
+    if (!wrapper) return;
+    
+    const ensureScrollbarVisible = () => {
+      if (wrapper) {
+        wrapper.style.overflowX = 'scroll';
+      }
+    };
+    
+    ensureScrollbarVisible();
+    const observer = new MutationObserver(ensureScrollbarVisible);
+    observer.observe(wrapper, { attributes: true, attributeFilter: ['style'] });
+    
+    return () => observer.disconnect();
+  }, []);
 
   const handleStatusDropdownToggle = (sentenceId: number) => {
     setOpenStatusDropdown(current => current === sentenceId ? null : sentenceId);
@@ -355,37 +374,75 @@ const AuditTable: React.FC<AuditTableProps> = ({
       />
 
       {/* Table */}
-      <div className="flex-1 relative w-full table-scroll-wrapper" style={{
-        overflowX: 'scroll',
-        overflowY: 'auto',
-        scrollbarWidth: 'auto',
-        scrollbarColor: '#cbd5e1 #f1f5f9'
-      }}>
+      <div ref={scrollWrapperRef} className="flex-1 relative w-full table-scroll-wrapper">
         <style>{`
           .table-scroll-wrapper {
             overflow-x: scroll !important;
             overflow-y: auto;
+            /* Hide native scrollbar for Firefox and show custom styled one */
+            scrollbar-width: thin;
+            scrollbar-color: #cbd5e1 #f1f5f9;
+            /* Reserve space for scrollbar to prevent layout shift */
+            scrollbar-gutter: stable;
           }
+          /* Webkit browsers (Chrome, Safari, Edge) - Completely hide native scrollbar and show custom styled one */
           .table-scroll-wrapper::-webkit-scrollbar {
+            -webkit-appearance: none !important;
+            appearance: none !important;
+            display: block !important;
             width: 12px;
             height: 12px;
-            display: block;
+            background: transparent;
+          }
+          .table-scroll-wrapper::-webkit-scrollbar:horizontal {
+            height: 12px !important;
+            display: block !important;
+          }
+          .table-scroll-wrapper::-webkit-scrollbar:vertical {
+            width: 12px !important;
+            display: block !important;
           }
           .table-scroll-wrapper::-webkit-scrollbar-track {
             background: #f1f5f9;
             border-radius: 6px;
+            display: block !important;
+            -webkit-appearance: none !important;
+            opacity: 1 !important;
+            visibility: visible !important;
+          }
+          .table-scroll-wrapper::-webkit-scrollbar-track:horizontal {
+            display: block !important;
+            height: 12px;
+            -webkit-appearance: none !important;
+            opacity: 1 !important;
+            visibility: visible !important;
           }
           .table-scroll-wrapper::-webkit-scrollbar-thumb {
             background: #cbd5e1;
             border-radius: 6px;
             border: 2px solid #f1f5f9;
+            display: block !important;
+            opacity: 1 !important;
+            visibility: visible !important;
+          }
+          .table-scroll-wrapper::-webkit-scrollbar-thumb:horizontal {
+            min-width: 12px;
+            height: 12px;
+            display: block !important;
+            opacity: 1 !important;
+            visibility: visible !important;
+          }
+          .table-scroll-wrapper::-webkit-scrollbar-thumb:vertical {
             min-height: 12px;
+            width: 12px;
+            display: block !important;
           }
           .table-scroll-wrapper::-webkit-scrollbar-thumb:hover {
             background: #94a3b8;
           }
           .table-scroll-wrapper::-webkit-scrollbar-corner {
             background: #f1f5f9;
+            display: block !important;
           }
         `}</style>
         <div className="p-6">
