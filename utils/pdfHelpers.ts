@@ -26,10 +26,10 @@ export const extractTextFromPDF = async (file: File): Promise<string> => {
       
       // Extract text items and join them with proper spacing
       const pageText = textContent.items
-        .map((item: any) => {
+        .map((item) => {
           // Handle both text items and marked content items
           if ('str' in item) {
-            return item.str;
+            return (item as { str: string }).str;
           }
           return '';
         })

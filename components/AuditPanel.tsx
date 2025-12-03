@@ -14,6 +14,7 @@ interface AuditPanelProps {
   onApprove?: (id: number) => void;
   onReject?: (id: number) => void;
   onSentenceUpdate?: (id: number, updates: Partial<VerifiedSentence>) => void;
+  onSentenceDelete?: (id: number) => void;
 }
 
 const AuditPanel: React.FC<AuditPanelProps> = ({
@@ -22,6 +23,7 @@ const AuditPanel: React.FC<AuditPanelProps> = ({
   activeSentenceId,
   onSentenceClick,
   onSentenceUpdate,
+  onSentenceDelete,
 }) => {
   const analyzedSentences = useMemo(() => 
     sentences.filter(s => s.status !== VerificationStatus.PENDING),
@@ -113,6 +115,7 @@ const AuditPanel: React.FC<AuditPanelProps> = ({
         activeSentenceId={activeSentenceId}
         onSentenceClick={onSentenceClick}
         onSentenceUpdate={onSentenceUpdate}
+        onSentenceDelete={onSentenceDelete}
       />
     </div>
   );

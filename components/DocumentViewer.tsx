@@ -32,7 +32,7 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
   const [currentPage, setCurrentPage] = useState(1);
   const [scale, setScale] = useState(1.2);
   const [textItems, setTextItems] = useState<TextItem[]>([]);
-  const [viewport, setViewport] = useState<any>(null);
+  const [viewport, setViewport] = useState<{ width: number; height: number } | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   
   // Tooltip State
@@ -324,7 +324,7 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
              </div>
            </div>
            <p className="line-clamp-3 text-slate-300 leading-relaxed font-medium">
-             "{hoveredInfo.sentence.text}"
+             &quot;{hoveredInfo.sentence.text}&quot;
            </p>
            
            {/* Arrow */}

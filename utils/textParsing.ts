@@ -7,15 +7,18 @@ export const segmentTextIntoSentences = (text: string): VerifiedSentence[] => {
   let globalIndex = 0;
   const allSentences: VerifiedSentence[] = [];
 
-  // Cast Intl to any to avoid TS error for Segmenter if types are missing
+  // Cast Intl to unknown then to Segmenter type to avoid TS error for Segmenter if types are missing
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const segmenter = new (Intl as any).Segmenter('en', { granularity: 'sentence' });
 
   rawParagraphs.forEach((para) => {
     // If paragraph is too short, it might be a header or noise, but we keep it.
     if (!para.trim()) return;
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const segments = Array.from(segmenter.segment(para) as Iterable<any>);
     
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     segments.forEach((seg: any) => {
       const cleanText = seg.segment.trim();
       if (cleanText.length > 0) {
@@ -69,7 +72,7 @@ const heuristicParagraphBreak = (sentences: VerifiedSentence[]): VerifiedSentenc
   const paragraphs: VerifiedSentence[][] = [];
   let currentPara: VerifiedSentence[] = [];
   
-  sentences.forEach((sentence, i) => {
+  sentences.forEach((sentence) => {
     currentPara.push(sentence);
     // Randomly break between 4-8 sentences
     const shouldBreak = currentPara.length > 6; 

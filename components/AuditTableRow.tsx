@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { 
   CheckCircle2, AlertTriangle, XCircle, 
   FileText, ChevronDown, Check, Pencil, X, Plus, Trash2
@@ -8,6 +8,17 @@ import {
   TableRow,
   TableCell,
 } from './ui/table';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from './ui/alert-dialog';
 
 interface EvidenceEntry {
   id: string;
@@ -37,6 +48,7 @@ interface AuditTableRowProps {
   onEvidenceSave: (sentenceId: number) => void;
   onEvidenceCancel: (sentenceId: number) => void;
   onEvidenceEdit: (sentenceId: number) => void;
+  onDelete?: (sentenceId: number) => void;
   statusDropdownRef: (el: HTMLDivElement | null) => void;
   sourceDropdownRef: (el: HTMLDivElement | null) => void;
 }
@@ -90,7 +102,7 @@ const deriveEvidenceList = (
       try {
         const parsed = JSON.parse(sentence.citationText);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          evidenceList = parsed.map((entry: any, idx: number) => ({
+          evidenceList = parsed.map((entry: { text?: string; sourceId?: string }, idx: number) => ({
             id: String(idx + 1),
             text: entry.text || '',
             sourceId: entry.sourceId
@@ -133,6 +145,7 @@ const AuditTableRow: React.FC<AuditTableRowProps> = ({
   onEvidenceSave,
   onEvidenceCancel,
   onEvidenceEdit,
+  onDelete,
   statusDropdownRef,
   sourceDropdownRef,
 }) => {
@@ -145,6 +158,96 @@ const AuditTableRow: React.FC<AuditTableRowProps> = ({
   const evidenceList = deriveEvidenceList(editableEvidenceForSentence, sentence);
 
   const filteredEvidence = evidenceList.filter(e => e && e.text && e.text.trim());
+
+  const [deleteEvidenceDialogOpen, setDeleteEvidenceDialogOpen] = useState<Record<string, boolean>>({});
+  const [deleteRowDialogOpen, setDeleteRowDialogOpen] = useState(false);
+
+  // Check for missing source - need to check both citationSourceId and evidence entries
+  const hasMissingSource = (): boolean => {
+    // Default values based on status:
+    // - UNVERIFIED: likely missing source (default: Yes)
+    // - PARTIAL: might have source but incomplete (default: No, unless explicitly missing)
+    // - VERIFIED: should have source (default: No, unless explicitly missing)
+    
+    if (sentence.status === VerificationStatus.UNVERIFIED) {
+      // For UNVERIFIED, default to "Yes" unless we find a source
+      let hasSource = false;
+      if (sentence.citationSourceId) {
+        hasSource = true;
+      } else if (sentence.citationText) {
+        try {
+          const parsed = JSON.parse(sentence.citationText);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            hasSource = parsed.some((entry: { sourceId?: string }) => entry.sourceId);
+          } else if (typeof parsed === 'object' && parsed.sourceId) {
+            hasSource = true;
+          }
+        } catch {
+          // Not JSON, if there's citation text, check if it has meaningful content
+          if (sentence.citationText && sentence.citationText.trim() !== '') {
+            hasSource = false; // Has text but no source ID
+          }
+        }
+      }
+      
+      // Also check evidence list for sources
+      if (!hasSource && evidenceList.length > 0) {
+        hasSource = evidenceList.some(e => e.sourceId);
+      }
+      
+      return !hasSource; // UNVERIFIED without source = missing
+    } else {
+      // For VERIFIED and PARTIAL, default to "No" unless explicitly missing
+      let hasSource = false;
+      if (sentence.citationSourceId) {
+        hasSource = true;
+      } else if (sentence.citationText) {
+        try {
+          const parsed = JSON.parse(sentence.citationText);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            hasSource = parsed.some((entry: { sourceId?: string }) => entry.sourceId);
+          } else if (typeof parsed === 'object' && parsed.sourceId) {
+            hasSource = true;
+          }
+        } catch {
+          // Not JSON, if there's citation text, it might have source
+          if (sentence.citationText && sentence.citationText.trim() !== '') {
+            hasSource = false; // Has text but no source ID
+          }
+        }
+      }
+      
+      // Also check evidence list for sources
+      if (!hasSource && evidenceList.length > 0) {
+        hasSource = evidenceList.some(e => e.sourceId);
+      }
+      
+      return !hasSource; // Only show "Yes" if explicitly missing
+    }
+  };
+
+  // Check for conflicting information
+  const hasConflictingInfo = (): boolean => {
+    // Default values based on status:
+    // - PARTIAL: indicates conflicts/discrepancies (default: Yes)
+    // - UNVERIFIED: might indicate conflicts (default: No, unless reasoning suggests it)
+    // - VERIFIED: no conflicts (default: No)
+    
+    if (sentence.status === VerificationStatus.PARTIAL) {
+      return true; // PARTIAL status indicates conflicting info
+    } else if (sentence.status === VerificationStatus.UNVERIFIED) {
+      // Check reasoning for conflict indicators
+      const reasoning = sentence.reasoning?.toLowerCase() || '';
+      return reasoning.includes('contradict') || 
+             reasoning.includes('conflict') || 
+             reasoning.includes('discrepanc');
+    } else {
+      return false; // VERIFIED has no conflicts
+    }
+  };
+
+  const missingSource = hasMissingSource();
+  const conflictingInfo = hasConflictingInfo();
 
   return (
     <TableRow
@@ -365,15 +468,44 @@ const AuditTableRow: React.FC<AuditTableRowProps> = ({
                     }}
                     rows={1}
                   />
-                  {evidenceList.length > 1 && (
-                    <button
-                      onClick={() => onRemoveEvidence(sentence.id, evidence.id)}
-                      className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-md transition-colors flex-shrink-0 mt-1"
-                      title="Remove evidence"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  )}
+                  <AlertDialog 
+                    open={deleteEvidenceDialogOpen[evidence.id] || false}
+                    onOpenChange={(open) => setDeleteEvidenceDialogOpen(prev => ({ ...prev, [evidence.id]: open }))}
+                  >
+                    <AlertDialogTrigger asChild>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setDeleteEvidenceDialogOpen(prev => ({ ...prev, [evidence.id]: true }));
+                        }}
+                        className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-md transition-colors flex-shrink-0 mt-1"
+                        title="Remove evidence"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </AlertDialogTrigger>
+                    <AlertDialogContent onClick={(e) => e.stopPropagation()}>
+                      <AlertDialogHeader>
+                        <AlertDialogTitle>Remove Evidence</AlertDialogTitle>
+                        <AlertDialogDescription>
+                          Are you sure you want to remove this evidence entry? This action cannot be undone.
+                        </AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <AlertDialogFooter>
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogAction
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onRemoveEvidence(sentence.id, evidence.id);
+                            setDeleteEvidenceDialogOpen(prev => ({ ...prev, [evidence.id]: false }));
+                          }}
+                          className="bg-rose-600 hover:bg-rose-700"
+                        >
+                          Remove
+                        </AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
                 </div>
                 <div className="flex items-center gap-2">
                   <select
@@ -423,7 +555,7 @@ const AuditTableRow: React.FC<AuditTableRowProps> = ({
                   filteredEvidence.map((evidence, idx) => (
                     <div key={evidence.id || idx} className="bg-indigo-50/50 rounded-lg p-2 border border-indigo-100/50">
                       <p className="text-xs text-indigo-700 leading-relaxed italic">
-                        "{evidence.text}"
+                        &quot;{evidence.text}&quot;
                       </p>
                       {evidence.sourceId && (
                         <div className="flex items-center gap-1 mt-1">
@@ -473,6 +605,67 @@ const AuditTableRow: React.FC<AuditTableRowProps> = ({
           </div>
         ) : (
           <span className="text-slate-400 italic">No reasoning</span>
+        )}
+      </TableCell>
+      <TableCell className="text-sm">
+        <span
+          className={`inline-flex items-center px-2.5 py-1 rounded text-xs font-medium ${
+            missingSource
+              ? 'bg-rose-50 text-rose-700 border border-rose-200'
+              : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+          }`}
+        >
+          {missingSource ? 'Yes' : 'No'}
+        </span>
+      </TableCell>
+      <TableCell className="text-sm">
+        <span
+          className={`inline-flex items-center px-2.5 py-1 rounded text-xs font-medium ${
+            conflictingInfo
+              ? 'bg-amber-50 text-amber-700 border border-amber-200'
+              : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+          }`}
+        >
+          {conflictingInfo ? 'Yes' : 'No'}
+        </span>
+      </TableCell>
+      <TableCell>
+        {onDelete && (
+          <AlertDialog open={deleteRowDialogOpen} onOpenChange={setDeleteRowDialogOpen}>
+            <AlertDialogTrigger asChild>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setDeleteRowDialogOpen(true);
+                }}
+                className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-md transition-colors"
+                title="Delete row"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+            </AlertDialogTrigger>
+            <AlertDialogContent onClick={(e) => e.stopPropagation()}>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Delete Row</AlertDialogTitle>
+                <AlertDialogDescription>
+                  Are you sure you want to delete this row? This action cannot be undone.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDelete(sentence.id);
+                    setDeleteRowDialogOpen(false);
+                  }}
+                  className="bg-rose-600 hover:bg-rose-700"
+                >
+                  Delete
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         )}
       </TableCell>
     </TableRow>

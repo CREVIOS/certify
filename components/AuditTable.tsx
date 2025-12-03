@@ -16,6 +16,7 @@ interface AuditTableProps {
   activeSentenceId: number | null;
   onSentenceClick: (sentence: VerifiedSentence) => void;
   onSentenceUpdate?: (id: number, updates: Partial<VerifiedSentence>) => void;
+  onSentenceDelete?: (id: number) => void;
 }
 
 const AuditTable: React.FC<AuditTableProps> = ({
@@ -24,6 +25,7 @@ const AuditTable: React.FC<AuditTableProps> = ({
   activeSentenceId,
   onSentenceClick,
   onSentenceUpdate,
+  onSentenceDelete,
 }) => {
   const [filter, setFilter] = useState<FilterType>('all');
   const [openStatusDropdown, setOpenStatusDropdown] = useState<number | null>(null);
@@ -56,7 +58,7 @@ const AuditTable: React.FC<AuditTableProps> = ({
           const parsed = JSON.parse(s.citationText);
           if (Array.isArray(parsed) && parsed.length > 0) {
             // Multiple evidence entries stored as JSON
-            evidenceMap[s.id] = parsed.map((entry: any, idx: number) => ({
+            evidenceMap[s.id] = parsed.map((entry: { text?: string; sourceId?: string }, idx: number) => ({
               id: String(idx + 1),
               text: entry.text || '',
               sourceId: entry.sourceId
@@ -224,7 +226,31 @@ const AuditTable: React.FC<AuditTableProps> = ({
         text: e.text,
         sourceId: e.sourceId
       })));
-      onSentenceUpdate(sentenceId, { citationText: evidenceData });
+      
+      // Extract all sourceIds from evidence entries (exactly what's in evidence)
+      // Deduplicate: if a source appears multiple times, show it only once
+      const evidenceSourceIds = Array.from(new Set(
+        validEntries
+          .map(e => e.sourceId)
+          .filter((id): id is string => !!id && id.trim() !== '')
+      ));
+      
+      // Update selectedSources to match exactly what's in evidence
+      // This ensures bidirectional sync: evidence sources = source file name sources
+      setSelectedSources(prev => ({ ...prev, [sentenceId]: evidenceSourceIds }));
+      
+      // Prepare updates object
+      const updates: Partial<VerifiedSentence> = { citationText: evidenceData };
+      
+      // Update citationSourceId with the first source (for backward compatibility)
+      if (evidenceSourceIds.length > 0) {
+        updates.citationSourceId = evidenceSourceIds[0] as string;
+      } else {
+        updates.citationSourceId = undefined;
+      }
+      
+      // Apply all updates in a single call
+      onSentenceUpdate(sentenceId, updates);
     }
     setEditingEvidence(null);
   };
@@ -239,7 +265,7 @@ const AuditTable: React.FC<AuditTableProps> = ({
         if (Array.isArray(parsed) && parsed.length > 0) {
           setEditableEvidence(prev => ({
             ...prev,
-            [sentenceId]: parsed.map((entry: any, idx: number) => ({
+            [sentenceId]: parsed.map((entry: { text?: string; sourceId?: string }, idx: number) => ({
               id: String(idx + 1),
               text: entry.text || '',
               sourceId: entry.sourceId
@@ -281,7 +307,7 @@ const AuditTable: React.FC<AuditTableProps> = ({
           if (Array.isArray(parsed) && parsed.length > 0) {
             setEditableEvidence(prev => ({
               ...prev,
-              [sentenceId]: parsed.map((entry: any, idx: number) => ({
+              [sentenceId]: parsed.map((entry: { text?: string; sourceId?: string }, idx: number) => ({
                 id: String(idx + 1),
                 text: entry.text || '',
                 sourceId: entry.sourceId
@@ -329,14 +355,21 @@ const AuditTable: React.FC<AuditTableProps> = ({
       />
 
       {/* Table */}
-      <div className="flex-1 relative w-full overflow-auto table-scroll-wrapper" style={{
+      <div className="flex-1 relative w-full table-scroll-wrapper" style={{
+        overflowX: 'scroll',
+        overflowY: 'auto',
         scrollbarWidth: 'auto',
         scrollbarColor: '#cbd5e1 #f1f5f9'
       }}>
         <style>{`
+          .table-scroll-wrapper {
+            overflow-x: scroll !important;
+            overflow-y: auto;
+          }
           .table-scroll-wrapper::-webkit-scrollbar {
             width: 12px;
             height: 12px;
+            display: block;
           }
           .table-scroll-wrapper::-webkit-scrollbar-track {
             background: #f1f5f9;
@@ -346,6 +379,7 @@ const AuditTable: React.FC<AuditTableProps> = ({
             background: #cbd5e1;
             border-radius: 6px;
             border: 2px solid #f1f5f9;
+            min-height: 12px;
           }
           .table-scroll-wrapper::-webkit-scrollbar-thumb:hover {
             background: #94a3b8;
@@ -364,6 +398,9 @@ const AuditTable: React.FC<AuditTableProps> = ({
                 <TableHead className="min-w-[150px]">Source File Name</TableHead>
                 <TableHead className="min-w-[250px]">Evidence</TableHead>
                 <TableHead className="min-w-[300px]">AI Reasoning</TableHead>
+                <TableHead className="w-[140px]">Missing Source</TableHead>
+                <TableHead className="w-[140px]">Conflicting Info</TableHead>
+                <TableHead className="w-[80px]">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -397,6 +434,7 @@ const AuditTable: React.FC<AuditTableProps> = ({
                     onEvidenceSave={handleEvidenceSave}
                     onEvidenceCancel={handleEvidenceCancel}
                     onEvidenceEdit={handleEvidenceEdit}
+                    onDelete={onSentenceDelete}
                     statusDropdownRef={(el) => { statusDropdownRefs.current[sentence.id] = el; }}
                     sourceDropdownRef={(el) => { sourceDropdownRefs.current[sentence.id] = el; }}
                   />

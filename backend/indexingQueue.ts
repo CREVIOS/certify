@@ -1,4 +1,4 @@
-import { Queue, Worker, QueueEvents, Job } from 'bullmq';
+import { Queue, Worker, Job } from 'bullmq';
 import { processDocument, ProcessingJobData } from './documentProcessor';
 
 // Connection to the Redis service defined in docker-compose
