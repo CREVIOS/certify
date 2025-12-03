@@ -13,8 +13,6 @@ interface RightSidebarProps {
 const RightSidebar: React.FC<RightSidebarProps> = ({ 
   activeSentence, 
   documents,
-  onApprove,
-  onReject
 }) => {
   if (!activeSentence) {
     return (
@@ -77,7 +75,7 @@ const RightSidebar: React.FC<RightSidebarProps> = ({
 
   return (
     <div className="w-full h-full flex flex-col bg-white border-l border-slate-200/60 shadow-xl shadow-slate-200/50">
-      
+
       {/* Status Header */}
       <div className={`px-6 py-8 border-b border-slate-100 ${config.bg}`}>
         <div className="flex items-start justify-between">
@@ -166,29 +164,6 @@ const RightSidebar: React.FC<RightSidebarProps> = ({
           </div>
         </div>
       </div>
-
-      {/* Sticky Footer Actions */}
-      <div className="p-5 border-t border-slate-100 bg-white/90 backdrop-blur-md absolute bottom-0 w-full z-10">
-        <div className="flex gap-3">
-          <button 
-            onClick={() => onReject(activeSentence.id)}
-            className="flex-1 py-2.5 bg-white border border-slate-200 rounded-lg shadow-sm text-xs font-semibold text-slate-600 hover:text-rose-600 hover:border-rose-200 hover:bg-rose-50 hover:shadow transition-all flex items-center justify-center gap-2 active:scale-95"
-          >
-             <X className="w-3.5 h-3.5" />
-             Reject
-          </button>
-          <button 
-            onClick={() => onApprove(activeSentence.id)}
-            className="flex-1 py-2.5 bg-slate-900 border border-transparent rounded-lg shadow-md shadow-slate-900/10 text-xs font-semibold text-white hover:bg-indigo-600 hover:shadow-indigo-500/20 transition-all flex items-center justify-center gap-2 active:scale-95"
-          >
-             <Check className="w-3.5 h-3.5" />
-             Confirm
-          </button>
-        </div>
-      </div>
-      
-      {/* Spacer for sticky footer */}
-      <div className="h-20"></div>
     </div>
   );
 };

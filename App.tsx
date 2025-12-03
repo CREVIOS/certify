@@ -23,6 +23,26 @@ const App: React.FC = () => {
   const [dragActive, setDragActive] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>('pdf');
   
+  // Initialize sidebar widths based on screen size (percentage-based)
+  const getInitialLeftWidth = () => {
+    if (typeof window !== 'undefined') {
+      return window.innerWidth * 0.20; // 20% default
+    }
+    return 280; // fallback
+  };
+  
+  const getInitialRightWidth = () => {
+    if (typeof window !== 'undefined') {
+      return window.innerWidth * 0.35; // 35% default
+    }
+    return 340; // fallback
+  };
+  
+  const [leftSidebarWidth, setLeftSidebarWidth] = useState(() => getInitialLeftWidth());
+  const [rightSidebarWidth, setRightSidebarWidth] = useState(() => getInitialRightWidth());
+  const [isResizingLeft, setIsResizingLeft] = useState(false);
+  const [isResizingRight, setIsResizingRight] = useState(false);
+  
   const [supportingDocs, setSupportingDocs] = useState<SupportingDocument[]>([]);
   const [ipoDoc, setIpoDoc] = useState<IPODocument | null>(null);
   const [activeSentenceId, setActiveSentenceId] = useState<number | null>(null);
@@ -35,12 +55,77 @@ const App: React.FC = () => {
       setIsMobile(mobile);
       if (mobile) setSidebarOpen(false);
       else setSidebarOpen(true);
+      
+      // Constrain sidebar widths to min/max when window resizes
+      const leftMinWidth = window.innerWidth * 0.15; // 15% min
+      const leftMaxWidth = window.innerWidth * 0.30; // 30% max
+      const rightMinWidth = window.innerWidth * 0.25; // 25% min
+      const rightMaxWidth = window.innerWidth * 0.40; // 40% max
+      
+      setLeftSidebarWidth(prev => Math.min(Math.max(prev, leftMinWidth), leftMaxWidth));
+      setRightSidebarWidth(prev => Math.min(Math.max(prev, rightMinWidth), rightMaxWidth));
     };
     
     handleResize();
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
+
+  // Handle left sidebar resize
+  useEffect(() => {
+    if (!isResizingLeft) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const minWidth = window.innerWidth * 0.15; // 15% min
+      const maxWidth = window.innerWidth * 0.30; // 30% max
+      const newWidth = Math.min(Math.max(e.clientX, minWidth), maxWidth);
+      setLeftSidebarWidth(newWidth);
+    };
+
+    const handleMouseUp = () => {
+      setIsResizingLeft(false);
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+  }, [isResizingLeft]);
+
+  // Handle right sidebar resize
+  useEffect(() => {
+    if (!isResizingRight) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const minWidth = window.innerWidth * 0.25; // 25% min
+      const maxWidth = window.innerWidth * 0.40; // 40% max
+      const newWidth = Math.min(Math.max(window.innerWidth - e.clientX, minWidth), maxWidth);
+      setRightSidebarWidth(newWidth);
+    };
+
+    const handleMouseUp = () => {
+      setIsResizingRight(false);
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+  }, [isResizingRight]);
   
   const processMainFile = async (file: File) => {
     setIsParsing(true);
@@ -304,28 +389,6 @@ const App: React.FC = () => {
                 <div className="w-px h-4 bg-slate-200 mx-1 hidden md:block"></div>
               </>
             )}
-
-            <button 
-              onClick={handleAnalyze}
-              disabled={isAnalyzing || !ipoDoc}
-              className={`flex items-center gap-2 px-4 py-1.5 rounded-lg text-xs font-semibold text-white transition-all duration-200 shadow-sm
-                ${(isAnalyzing || !ipoDoc) 
-                  ? 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed shadow-none' 
-                  : 'bg-indigo-600 hover:bg-indigo-700 hover:shadow-indigo-500/25 border border-transparent'}
-              `}
-            >
-              {isAnalyzing ? (
-                <>
-                   <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                   <span>{indexingProgress}%</span>
-                </>
-              ) : (
-                <>
-                  <Sparkles className="w-3.5 h-3.5" />
-                  <span>Run Audit</span>
-                </>
-              )}
-            </button>
            </div>
         </div>
       </header>
@@ -336,18 +399,40 @@ const App: React.FC = () => {
         {/* Left Sidebar */}
         <div 
           className={`
-            fixed inset-y-0 left-0 pt-14 z-40 bg-white transition-all duration-300 ease-in-out transform
-            ${sidebarOpen ? 'translate-x-0 w-[280px]' : '-translate-x-full w-0'}
-            lg:relative lg:translate-x-0 
+            fixed top-14 bottom-0 left-0 z-40 bg-white transition-all duration-300 ease-in-out transform
+            ${sidebarOpen ? 'translate-x-0' : '-translate-x-full w-0'}
+            lg:relative lg:translate-x-0 lg:top-0
             ${!sidebarOpen && 'lg:w-0 lg:overflow-hidden'}
           `}
+          style={{ 
+            width: sidebarOpen ? `${leftSidebarWidth}px` : '0px',
+            transition: isResizingLeft ? 'none' : 'width 0.3s ease-in-out'
+          }}
         >
-          <div className="h-full w-[280px]">
+          <div className="h-full overflow-hidden flex flex-col" style={{ width: `${leftSidebarWidth}px` }}>
              <LeftSidebar 
               documents={supportingDocs} 
               onUpload={handleUploadEvidence}
+              onRunAudit={handleAnalyze}
+              isAnalyzing={isAnalyzing}
+              hasIpoDoc={!!ipoDoc}
+              indexingProgress={indexingProgress}
             />
           </div>
+          
+          {/* Left Resize Handle */}
+          {sidebarOpen && !isMobile && (
+            <div
+              className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-indigo-400/30 bg-transparent z-50 group transition-colors"
+              onMouseDown={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setIsResizingLeft(true);
+              }}
+            >
+              <div className="absolute top-1/2 right-0 -translate-y-1/2 translate-x-1/2 w-1 h-16 bg-slate-300 rounded-full group-hover:bg-indigo-500 transition-colors opacity-0 group-hover:opacity-100" />
+            </div>
+          )}
         </div>
 
         {/* Mobile Overlay */}
@@ -374,8 +459,14 @@ const App: React.FC = () => {
                  documents={supportingDocs}
                  activeSentenceId={activeSentenceId}
                  onSentenceClick={(s) => setActiveSentenceId(s.id)}
-                 onApprove={handleApprove}
-                 onReject={handleReject}
+                 onSentenceUpdate={(id, updates) => {
+                   setIpoDoc(prev => prev ? {
+                     ...prev,
+                     sentences: prev.sentences.map(s => 
+                       s.id === id ? { ...s, ...updates } : s
+                     )
+                   } : null);
+                 }}
                />
              )
            ) : (
@@ -439,12 +530,16 @@ const App: React.FC = () => {
         {viewMode === 'pdf' && (
           <div 
             className={`
-              fixed inset-y-0 right-0 pt-14 z-30 bg-white transition-transform duration-300 ease-in-out
-              w-[340px] shadow-2xl lg:shadow-none
+              fixed top-14 bottom-0 right-0 z-30 bg-white transition-transform duration-300 ease-in-out
+              shadow-2xl lg:shadow-none
               ${(activeSentenceId !== null || (!isMobile && ipoDoc)) ? 'translate-x-0' : 'translate-x-full'}
-              lg:relative lg:translate-x-0 lg:flex lg:flex-col
+              lg:relative lg:top-0 lg:translate-x-0 lg:flex lg:flex-col
               ${!ipoDoc && 'lg:hidden'}
             `}
+            style={{ 
+              width: `${rightSidebarWidth}px`,
+              transition: isResizingRight ? 'none' : 'transform 0.3s ease-in-out, width 0.3s ease-in-out'
+            }}
           >
              {/* Mobile Close */}
              {isMobile && activeSentenceId !== null && (
@@ -456,12 +551,28 @@ const App: React.FC = () => {
                </button>
              )}
 
-            <RightSidebar 
-              activeSentence={activeSentence}
-              documents={supportingDocs}
-              onApprove={handleApprove}
-              onReject={handleReject}
-            />
+            <div className="h-full" style={{ width: `${rightSidebarWidth}px` }}>
+              <RightSidebar 
+                activeSentence={activeSentence}
+                documents={supportingDocs}
+                onApprove={handleApprove}
+                onReject={handleReject}
+              />
+            </div>
+            
+            {/* Right Resize Handle */}
+            {!isMobile && ipoDoc && (
+              <div
+                className="absolute top-0 left-0 w-1 h-full cursor-col-resize hover:bg-indigo-400/30 bg-transparent z-50 group transition-colors"
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setIsResizingRight(true);
+                }}
+              >
+                <div className="absolute top-1/2 left-0 -translate-y-1/2 -translate-x-1/2 w-1 h-16 bg-slate-300 rounded-full group-hover:bg-indigo-500 transition-colors opacity-0 group-hover:opacity-100" />
+              </div>
+            )}
           </div>
         )}
       </div>
