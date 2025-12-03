@@ -9,7 +9,7 @@ import { indexSingleDocument, analyzeIPODocumentRAG } from './services/geminiSer
 import { downloadVerificationReport } from './utils/exportUtils';
 import { segmentTextIntoSentences } from './utils/textParsing';
 import { extractTextFromPDF } from './utils/pdfHelpers';
-import { ShieldCheck, Download, Loader2, FileUp, UploadCloud, Sparkles, Menu, PanelLeftClose, PanelLeftOpen, LayoutTemplate, FileText, ClipboardCheck } from 'lucide-react';
+import { ShieldCheck, Download, Loader2, FileUp, UploadCloud, PanelLeftClose, PanelLeftOpen, FileText, ClipboardCheck } from 'lucide-react';
 
 type ViewMode = 'pdf' | 'audit';
 
@@ -276,6 +276,18 @@ const App: React.FC = () => {
     }) : null);
   };
 
+  const handleDeleteSentence = (id: number) => {
+    if (!ipoDoc) return;
+    setIpoDoc(prev => prev ? ({
+      ...prev,
+      sentences: prev.sentences.filter(s => s.id !== id)
+    }) : null);
+    // Clear active sentence if it was deleted
+    if (activeSentenceId === id) {
+      setActiveSentenceId(null);
+    }
+  };
+
   const handleDownload = () => {
     if (ipoDoc) {
       downloadVerificationReport(ipoDoc.sentences, supportingDocs);
@@ -467,6 +479,7 @@ const App: React.FC = () => {
                      )
                    } : null);
                  }}
+                 onSentenceDelete={handleDeleteSentence}
                />
              )
            ) : (
@@ -557,6 +570,7 @@ const App: React.FC = () => {
                 documents={supportingDocs}
                 onApprove={handleApprove}
                 onReject={handleReject}
+                onDelete={handleDeleteSentence}
               />
             </div>
             

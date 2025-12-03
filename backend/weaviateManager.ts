@@ -1,4 +1,4 @@
-import weaviate, { WeaviateClient, ObjectsBatcher } from 'weaviate-ts-client';
+import weaviate, { WeaviateClient } from 'weaviate-ts-client';
 import { GoogleGenAI } from "@google/genai";
 
 // SOTA: Singleton Pattern for Database Connection
@@ -11,11 +11,6 @@ class WeaviateManager {
     this.client = weaviate.client({
       scheme: 'http',
       host: 'localhost:8080',
-      // SOTA: Grpc is significantly faster for batch imports
-      grpcConfig: {
-        secure: false, 
-        timeout: 60000
-      }
     });
     this.ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   }
@@ -41,10 +36,19 @@ class WeaviateManager {
     };
 
     try {
-      const exists = await this.client.schema.classExists('IPODocumentChunk');
-      if (!exists) {
-        await this.client.schema.classCreator().withClass(classObj).do();
-        console.log('Schema created successfully');
+      // Check if class exists by trying to get it
+      try {
+        await this.client.schema.classGetter().withClassName('IPODocumentChunk').do();
+        // Class exists, no need to create
+      } catch (error: unknown) {
+        // Class doesn't exist, create it
+        const err = error as { statusCode?: number; message?: string };
+        if (err.statusCode === 404 || err.message?.includes('not found')) {
+          await this.client.schema.classCreator().withClass(classObj).do();
+          console.log('Schema created successfully');
+        } else {
+          throw error;
+        }
       }
     } catch (error) {
       console.error('Schema check failed', error);
@@ -53,7 +57,7 @@ class WeaviateManager {
 
   // SOTA: Batch Processing with Error Handling
   public async batchInsert(
-    chunks: { text: string; metadata: any }[]
+    chunks: { text: string; metadata: Record<string, unknown> }[]
   ) {
     // Get embeddings in parallel batches first
     // (See documentProcessor.ts for the embedding generation logic)
@@ -91,8 +95,9 @@ class WeaviateManager {
       }
     }
 
-    // Flush remaining
-    if (batcher.payload().length > 0) {
+    // Flush remaining - check if there are any objects in the batcher
+    // The batcher tracks objects internally, so we flush if counter indicates remaining items
+    if (counter % BATCH_SIZE !== 0) {
       await batcher.do();
     }
   }

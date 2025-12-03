@@ -1,6 +1,6 @@
 
 import React, { useRef, useState, useMemo } from 'react';
-import { FileText, Database, BarChart3, ShieldCheck, Plus, Loader2, FolderGit2, Search, Zap, File, FileSpreadsheet, FileType, Upload, Sparkles } from 'lucide-react';
+import { FileText, Database, BarChart3, ShieldCheck, Loader2, FolderGit2, Search, Zap, File, FileSpreadsheet, FileType, Upload, Sparkles } from 'lucide-react';
 import { SupportingDocument } from '../types';
 import { extractTextFromPDF } from '../utils/pdfHelpers';
 
@@ -149,7 +149,7 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ documents, onUpload, onRunAud
         
         {documents.length > 0 && filteredDocs.length === 0 && (
            <div className="text-center py-8">
-             <p className="text-xs text-slate-400">No files match "{searchQuery}"</p>
+             <p className="text-xs text-slate-400">No files match &quot;{searchQuery}&quot;</p>
            </div>
         )}
       </div>

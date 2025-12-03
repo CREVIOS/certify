@@ -1,11 +1,11 @@
-import { RecursiveCharacterTextSplitter } from "langchain/text_splitter";
-import pLimit from 'p-limit'; // SOTA: Concurrency control
+import { RecursiveCharacterTextSplitter } from "@langchain/textsplitters";
 import WeaviateManager from "./weaviateManager";
 
 // Configuration
 const CHUNK_SIZE = 1000;
 const CHUNK_OVERLAP = 200;
-const CONCURRENCY_LIMIT = 10; // Max concurrent embedding requests to avoid 429 errors
+// Note: CONCURRENCY_LIMIT reserved for future parallel processing implementation
+// const CONCURRENCY_LIMIT = 10; // Max concurrent embedding requests to avoid 429 errors
 
 export interface ProcessingJobData {
   jobId: string;
@@ -40,9 +40,7 @@ export const processDocument = async (data: ProcessingJobData) => {
 
   // 2. Parallel Processing with Rate Limiting (The SOTA part)
   // We don't want to send 1000 chunks to Weaviate/Gemini at once.
-  // We map the chunks to an array of promises, controlled by p-limit.
-  
-  const limit = pLimit(CONCURRENCY_LIMIT);
+  // Future: We can map the chunks to an array of promises, controlled by p-limit.
   
   // We create a data structure ready for the Weaviate Manager
   // In a real SOTA system, we might decouple Embedding generation from DB Insertion
