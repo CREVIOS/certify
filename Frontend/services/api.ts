@@ -34,12 +34,21 @@ type VerificationJob = {
 
 const jsonHeaders = { "Content-Type": "application/json" };
 
-const handle = async (res: Response) => {
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(text || res.statusText);
+const handle = async (resPromise: Promise<Response>) => {
+  try {
+    const res = await resPromise;
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(text || res.statusText);
+    }
+    return res.json();
+  } catch (err) {
+    // Handle network errors (CORS, connection refused, etc.)
+    if (err instanceof TypeError) {
+      throw new Error('Cannot connect to backend API. Please ensure the backend server is running at ' + API_BASE);
+    }
+    throw err;
   }
-  return res.json();
 };
 
 export const ensureProject = async (name: string): Promise<Project> => {

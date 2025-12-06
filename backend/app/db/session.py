@@ -2,24 +2,26 @@
 
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import declarative_base
-from sqlalchemy.pool import NullPool, QueuePool
 from loguru import logger
+from uuid import uuid4
 
 from app.core.config import settings
 
 # Convert PostgreSQL URL to async version
 DATABASE_URL = settings.DATABASE_URL.replace('postgresql://', 'postgresql+asyncpg://')
 
-# Create async engine with connection pooling
+# Create async engine with pgbouncer compatibility
 engine = create_async_engine(
     DATABASE_URL,
     echo=settings.DEBUG,
-    poolclass=QueuePool,
-    pool_size=settings.DB_POOL_SIZE,
-    max_overflow=settings.DB_MAX_OVERFLOW,
-    pool_timeout=settings.DB_POOL_TIMEOUT,
-    pool_recycle=settings.DB_POOL_RECYCLE,
-    pool_pre_ping=True,  # Verify connections before using
+    pool_pre_ping=True,
+    connect_args={
+        # Disable prepared statements so pgbouncer (transaction/statement mode) won't choke
+        "statement_cache_size": 0,
+        "prepared_statement_cache_size": 0,
+        # Generate unique names if the driver prepares anyway
+        "prepared_statement_name_func": lambda: f"__asyncpg_{uuid4()}__",
+    },
 )
 
 # Create async session factory

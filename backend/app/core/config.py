@@ -3,6 +3,7 @@ Application configuration with GPT-4 and Gemini 2.5 Pro
 """
 
 from typing import List
+from pydantic import computed_field
 from pydantic_settings import BaseSettings
 
 
@@ -15,6 +16,10 @@ class Settings(BaseSettings):
     APP_NAME: str = "IPO Verification API"
     APP_ENV: str = "development"
     
+    # Logging
+    LOG_LEVEL: str = "INFO"
+    LOG_FORMAT: str = "text"  # "text" or "json"
+
     # Server
     HOST: str = "0.0.0.0"
     PORT: int = 8000
@@ -62,6 +67,7 @@ class Settings(BaseSettings):
     # Weaviate
     WEAVIATE_URL: str = "http://localhost:8080"
     WEAVIATE_API_KEY: str = ""
+    WEAVIATE_BATCH_SIZE: int = 100
 
     # Redis
     REDIS_URL: str = "redis://localhost:6379/0"
@@ -69,9 +75,17 @@ class Settings(BaseSettings):
     # RabbitMQ
     RABBITMQ_URL: str = "amqp://guest:guest@localhost:5672/"
 
+    # Celery
+    CELERY_BROKER_URL: str = "amqp://guest:guest@localhost:5672/"
+    CELERY_RESULT_BACKEND: str = "redis://localhost:6379/1"
+    CELERY_TASK_TRACK_STARTED: bool = True
+    CELERY_TASK_TIME_LIMIT: int = 600          # hard limit (seconds)
+    CELERY_TASK_SOFT_TIME_LIMIT: int = 300     # graceful limit (seconds)
+
     # OpenAI Configuration (GPT-4.1 + Embeddings)
     OPENAI_EMBEDDING_MODEL: str = "text-embedding-3-large"
     OPENAI_EMBEDDING_DIMENSION: int = 3072
+    OPENAI_EMBEDDING_BATCH_SIZE: int = 100  # Number of texts to embed per API request
     OPENAI_CHAT_MODEL: str = "gpt-4.1"  # GPT-4.1 (2025) - 1M token context, superior coding/reasoning
     OPENAI_TEMPERATURE: float = 0.1
     OPENAI_MAX_TOKENS: int = 4096
@@ -101,6 +115,7 @@ class Settings(BaseSettings):
     CONFIDENCE_THRESHOLD_UNCERTAIN: float = 0.6
     VERIFICATION_BATCH_SIZE: int = 5
     VERIFICATION_CONCURRENCY: int = 4
+    VERIFICATION_COMMIT_INTERVAL: int = 5  # Commit every N verified sentences
     # Retrieval/Chunking
     CHUNK_SIZE: int = 1200            # default for clean text
     CHUNK_OVERLAP: int = 180
@@ -115,6 +130,12 @@ class Settings(BaseSettings):
     MAX_UPLOAD_SIZE: int = 104857600  # 100MB
     ALLOWED_EXTENSIONS: str = "pdf,docx,doc"
     UPLOAD_DIR: str = "/app/uploads"
+
+    @computed_field
+    @property
+    def allowed_extensions_list(self) -> List[str]:
+        """Convert ALLOWED_EXTENSIONS string to list."""
+        return [ext.strip() for ext in self.ALLOWED_EXTENSIONS.split(',')]
 
     class Config:
         env_file = ".env"

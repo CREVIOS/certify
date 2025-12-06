@@ -28,6 +28,7 @@ services:
       RABBITMQ_DEFAULT_USER: admin
       RABBITMQ_DEFAULT_PASS: rabbitmq_password
       RABBITMQ_DEFAULT_VHOST: ipo_vhost
+      RABBITMQ_ERLANG_COOKIE: "my_super_secret_rabbitmq_cookie_for_erlang_cluster_auth_2024"
     ports:
       - "5672:5672"   # AMQP
       - "15672:15672" # Management UI

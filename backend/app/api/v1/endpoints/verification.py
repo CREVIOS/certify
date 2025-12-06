@@ -88,6 +88,14 @@ async def create_verification_job(
 
         logger.info(f"Created verification job {job.id}")
 
+        # Auto-start once (idempotent: only if no task id yet)
+        task = run_verification_task.apply_async(args=[str(job.id)], queue="verify")
+        job.celery_task_id = task.id
+        await db.commit()
+        await db.refresh(job)
+
+        logger.info(f"Auto-started verification job {job.id}: {task.id}")
+
         return job
 
     except HTTPException:
@@ -120,13 +128,22 @@ async def start_verification_job(
             )
 
         if job.status != VerificationStatus.PENDING:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Job is already {job.status.value}"
-            )
+            return {
+                "message": f"Job already {job.status.value}",
+                "job_id": str(job_id),
+                "task_id": job.celery_task_id
+            }
 
-        # Trigger Celery task
-        task = run_verification_task.delay(str(job_id))
+        # If already has a Celery task, don't enqueue again
+        if job.celery_task_id:
+            return {
+                "message": "Verification job already enqueued",
+                "job_id": str(job_id),
+                "task_id": job.celery_task_id
+            }
+
+        # Trigger Celery task (manual start)
+        task = run_verification_task.apply_async(args=[str(job_id)], queue="verify")
 
         # Update job with task ID
         job.celery_task_id = task.id

@@ -12,6 +12,9 @@ import enum
 
 from app.db.session import Base
 
+# Default user ID for all records (no authentication yet)
+DEFAULT_USER_ID = uuid.UUID('4b82586d-1d5b-4d7f-889f-ad9424433068')
+
 
 class DocumentType(str, enum.Enum):
     """Document type enumeration."""
@@ -42,6 +45,7 @@ class Project(Base):
     __tablename__ = "projects"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), nullable=False, default=DEFAULT_USER_ID)
     name = Column(String(255), nullable=False)
     description = Column(Text)
     background_context = Column(Text)
@@ -59,20 +63,31 @@ class Document(Base):
     __tablename__ = "documents"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), nullable=False, default=DEFAULT_USER_ID)
     project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
     filename = Column(String(500), nullable=False)
     original_filename = Column(String(500), nullable=False)
     file_path = Column(String(1000), nullable=False)
     file_size = Column(Integer, nullable=False)
     mime_type = Column(String(100), nullable=False)
-    document_type = Column(SQLEnum(DocumentType), nullable=False)
+    # Explicitly name enums to match existing Postgres types (e.g. Supabase schema)
+    document_type = Column(
+        # Use enum values (lowercase) when binding to the Postgres ENUM type
+        SQLEnum(
+            DocumentType,
+            name="document_type",
+            native_enum=True,
+            values_callable=lambda enum_cls: [e.value for e in enum_cls]
+        ),
+        nullable=False,
+    )
     page_count = Column(Integer)
     indexed = Column(Boolean, default=False)
     indexed_at = Column(DateTime)
     created_at = Column(DateTime, default=datetime.utcnow)
 
-    # Metadata
-    metadata = Column(JSONB, default={}, nullable=False)
+    # Metadata (using metadata_ to avoid SQLAlchemy reserved attribute)
+    metadata_ = Column("metadata", JSONB, default={}, nullable=False)
 
     # Relationships
     project = relationship("Project", back_populates="documents")
@@ -98,8 +113,8 @@ class DocumentChunk(Base):
     # Vector store reference
     weaviate_id = Column(String(255), unique=True)
 
-    # Metadata
-    metadata = Column(JSONB, default={}, nullable=False)
+    # Metadata (using metadata_ to avoid SQLAlchemy reserved attribute)
+    metadata_ = Column("metadata", JSONB, default={}, nullable=False)
 
     created_at = Column(DateTime, default=datetime.utcnow)
 
@@ -116,10 +131,20 @@ class VerificationJob(Base):
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), nullable=False, default=DEFAULT_USER_ID)
     project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
     main_document_id = Column(UUID(as_uuid=True), ForeignKey("documents.id", ondelete="SET NULL"))
 
-    status = Column(SQLEnum(VerificationStatus), default=VerificationStatus.PENDING, nullable=False)
+    status = Column(
+        SQLEnum(
+            VerificationStatus,
+            name="verification_status",
+            native_enum=True,
+            values_callable=lambda enum_cls: [e.value for e in enum_cls]
+        ),
+        default=VerificationStatus.PENDING,
+        nullable=False,
+    )
     progress = Column(Float, default=0.0, nullable=False)
 
     # Statistics
@@ -157,6 +182,7 @@ class VerifiedSentence(Base):
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), nullable=False, default=DEFAULT_USER_ID)
     verification_job_id = Column(UUID(as_uuid=True), ForeignKey("verification_jobs.id", ondelete="CASCADE"), nullable=False)
 
     # Sentence information
@@ -167,7 +193,16 @@ class VerifiedSentence(Base):
     end_char = Column(Integer)
 
     # Verification result
-    validation_result = Column(SQLEnum(ValidationResult), default=ValidationResult.PENDING, nullable=False)
+    validation_result = Column(
+        SQLEnum(
+            ValidationResult,
+            name="validation_result",
+            native_enum=True,
+            values_callable=lambda enum_cls: [e.value for e in enum_cls]
+        ),
+        default=ValidationResult.PENDING,
+        nullable=False,
+    )
     confidence_score = Column(Float)
 
     # AI reasoning

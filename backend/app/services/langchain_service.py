@@ -5,12 +5,14 @@ Uses GPT-4.1 and Gemini 2.5 Pro (2025 best models) for state-of-the-art verifica
 
 from typing import List, Dict, Any, Optional
 from langchain_openai import ChatOpenAI
-from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.prompts import ChatPromptTemplate, SystemMessagePromptTemplate, HumanMessagePromptTemplate
 from langchain.output_parsers import PydanticOutputParser
 from langchain.chains import LLMChain
 from pydantic import BaseModel, Field
 import json
+from google import genai
+from google.genai import types
+from loguru import logger
 
 from app.core.config import settings
 
@@ -48,12 +50,12 @@ class LangChainVerificationService:
             openai_api_key=settings.OPENAI_API_KEY
         )
 
-        # Initialize Gemini 2.5 Pro (secondary model for cross-validation - 2025 best model)
-        self.gemini = ChatGoogleGenerativeAI(
-            model=settings.GEMINI_MODEL,  # Gemini 2.5 Pro - Google's most intelligent model
-            temperature=settings.GEMINI_TEMPERATURE,
-            google_api_key=settings.GEMINI_API_KEY
-        )
+        # Initialize Gemini 2.5 Pro using new google-genai SDK (secondary model for cross-validation)
+        api_key = settings.GOOGLE_API_KEY or settings.GEMINI_API_KEY
+        if not api_key:
+            raise ValueError("Either GOOGLE_API_KEY or GEMINI_API_KEY must be set")
+        self.gemini_client = genai.Client(api_key=api_key)
+        self.gemini_model = settings.GEMINI_MODEL  # Gemini 2.5 Pro - Google's most intelligent model
 
         # Output parser for structured responses
         self.output_parser = PydanticOutputParser(pydantic_object=VerificationResult)
@@ -173,13 +175,15 @@ Verify this claim and provide structured output with citations."""
         gpt4_result: VerificationResult
     ) -> VerificationResult:
         """
-        Cross-validate GPT-4 result with Gemini 2.5 Pro
+        Cross-validate GPT-4 result with Gemini 2.5 Pro using new google-genai SDK
         """
-        prompt = self._create_verification_prompt()
-        chain = LLMChain(llm=self.gemini, prompt=prompt)
+        # Create verification prompt
+        prompt_template = self._create_verification_prompt()
         format_instructions = self.output_parser.get_format_instructions()
 
-        result = await chain.arun(
+        # Format the prompt messages
+        system_msg = prompt_template.messages[0].format(format_instructions=format_instructions)
+        human_msg = prompt_template.messages[1].format(
             claim=claim,
             claim_page=claim_page or "Unknown",
             evidence=evidence_text,
@@ -187,9 +191,23 @@ Verify this claim and provide structured output with citations."""
             format_instructions=format_instructions
         )
 
+        # Combine into full prompt
+        full_prompt = f"{system_msg.content}\n\n{human_msg.content}"
+
         try:
-            return self.output_parser.parse(result)
-        except:
+            # Call Gemini using new SDK
+            response = await self.gemini_client.aio.models.generate_content(
+                model=self.gemini_model,
+                contents=full_prompt,
+                config=types.GenerateContentConfig(
+                    temperature=settings.GEMINI_TEMPERATURE,
+                    max_output_tokens=settings.GEMINI_MAX_TOKENS,
+                ),
+            )
+
+            return self.output_parser.parse(response.text)
+        except Exception as e:
+            logger.error(f"Gemini cross-validation error: {e}")
             return gpt4_result  # Fallback to GPT-4 result
 
     def _merge_verifications(

@@ -27,5 +27,10 @@ dist-ssr
 .env
 .env.local
 
+# Python caches
+__pycache__/
+*.py[cod]
 
+# Uploaded files (stored in backend/uploads)
+backend/uploads/
 

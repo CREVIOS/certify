@@ -1,19 +1,16 @@
-version: '3.8'
-
 services:
   api:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    command: uvicorn app.main:socket_app --host 0.0.0.0 --port 8000 --reload
+    # Use no-reload inside container to avoid uvicorn/watchfiles quirks with pgbouncer + multiprocessing
+    command: uvicorn app.main:socket_app --host 0.0.0.0 --port 8000
     env_file:
       - ./backend/.env
     environment:
       - REDIS_URL=redis://redis:6379/0
       - RABBITMQ_URL=amqp://admin:rabbitmq_password@rabbitmq:5672/ipo_vhost
       - WEAVIATE_URL=http://weaviate:8080
-      - DATABASE_URL=${DATABASE_URL}
-      - DIRECT_URL=${DIRECT_URL}
     volumes:
       - ./backend:/app
     ports:
@@ -29,7 +26,8 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    command: celery -A app.tasks.celery_app worker --loglevel=info --concurrency=4 -Q verify,index,default
+    # Listen to all queues we emit to; include "celery" to drain any legacy tasks.
+    command: celery -A app.tasks.celery_app worker --loglevel=info --concurrency=4 --soft-time-limit=1200 --time-limit=1500 -Q verify,index,default,celery
     env_file:
       - ./backend/.env
     environment:
@@ -37,14 +35,40 @@ services:
       - CELERY_BROKER_URL=amqp://admin:rabbitmq_password@rabbitmq:5672/ipo_vhost
       - CELERY_RESULT_BACKEND=redis://redis:6379/1
       - WEAVIATE_URL=http://weaviate:8080
-      - DATABASE_URL=${DATABASE_URL}
-      - DIRECT_URL=${DIRECT_URL}
     volumes:
       - ./backend:/app
     depends_on:
       - redis
       - rabbitmq
       - weaviate
+    # The base image's healthcheck pings port 8000 (API), which isn't running in this container.
+    # Disable it to avoid perpetual "unhealthy" status.
+    healthcheck:
+      test: ["CMD-SHELL", "exit 0"]
+    networks:
+      - devnet
+
+  verify-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    # Dedicated worker for verification so it doesn't wait behind indexing tasks
+    command: celery -A app.tasks.celery_app worker --loglevel=info --concurrency=2 --soft-time-limit=1200 --time-limit=1500 -Q verify -n verify@%h
+    env_file:
+      - ./backend/.env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=amqp://admin:rabbitmq_password@rabbitmq:5672/ipo_vhost
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - WEAVIATE_URL=http://weaviate:8080
+    volumes:
+      - ./backend:/app
+    depends_on:
+      - redis
+      - rabbitmq
+      - weaviate
+    healthcheck:
+      test: ["CMD-SHELL", "exit 0"]
     networks:
       - devnet
 
@@ -61,6 +85,7 @@ services:
       RABBITMQ_DEFAULT_USER: admin
       RABBITMQ_DEFAULT_PASS: rabbitmq_password
       RABBITMQ_DEFAULT_VHOST: ipo_vhost
+      RABBITMQ_ERLANG_COOKIE: "my_super_secret_rabbitmq_cookie_for_erlang_cluster_auth_2024"
     ports:
       - "5672:5672"
       - "15672:15672"
