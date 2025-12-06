@@ -65,13 +65,15 @@ const App: React.FC = () => {
 
   const pendingSupportDocs = supportingDocs.filter(d => !d.isIndexed).length;
 
-  const ensureDefaultProject = async () => {
+  const ensureDefaultProject = async (): Promise<string | null> => {
     try {
       const project = await ensureProject('IPO Verification Workspace');
       setProjectId(project.id);
+      return project.id;
     } catch (err) {
       console.error(err);
       alert('Unable to initialize project. Check backend connectivity.');
+      return null;
     }
   };
 
@@ -169,7 +171,14 @@ const App: React.FC = () => {
   const processMainFile = async (file: File) => {
     setIsParsing(true);
     try {
-      if (!projectId) await ensureDefaultProject();
+      // Ensure we have a valid project ID before proceeding
+      let currentProjectId = projectId;
+      if (!currentProjectId) {
+        currentProjectId = await ensureDefaultProject();
+        if (!currentProjectId) {
+          throw new Error('Failed to initialize project. Please check backend connectivity and try again.');
+        }
+      }
 
       // Extract text locally for preview/highlight
       let text = '';
@@ -192,7 +201,7 @@ const App: React.FC = () => {
       setViewMode('pdf');
 
       // Upload to backend and trigger indexing
-      const uploaded = await uploadDocument(file, projectId as string, 'main');
+      const uploaded = await uploadDocument(file, currentProjectId, 'main');
       setMainDocumentId(uploaded.document_id);
       setIpoDoc((prev) => prev ? { ...prev, id: uploaded.document_id } : null);
 
@@ -239,7 +248,15 @@ const App: React.FC = () => {
   };
 
   const handleUploadEvidence = async (file: File, content: string) => {
-    if (!projectId) await ensureDefaultProject();
+    // Ensure we have a valid project ID before proceeding
+    let currentProjectId = projectId;
+    if (!currentProjectId) {
+      currentProjectId = await ensureDefaultProject();
+      if (!currentProjectId) {
+        alert('Failed to initialize project. Please check backend connectivity and try again.');
+        return;
+      }
+    }
 
     const tempId = `DOC-${String(supportingDocs.length + 1).padStart(3, '0')}`;
     const newDoc: SupportingDocument = {
@@ -253,7 +270,7 @@ const App: React.FC = () => {
     setSupportingDocs(prev => [...prev, newDoc]);
 
     try {
-      const uploaded = await uploadDocument(file, projectId as string, 'supporting');
+      const uploaded = await uploadDocument(file, currentProjectId, 'supporting');
       const backendId = uploaded.document_id;
 
       // Replace temp id with backend id

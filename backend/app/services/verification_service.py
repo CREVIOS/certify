@@ -1,12 +1,10 @@
-"""Verification service using Langchain and Google Gemini."""
+"""Verification service using Google Gemini with new google-genai SDK."""
 
 from typing import List, Dict, Tuple, Optional
 from uuid import UUID
 from loguru import logger
-
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain.prompts import ChatPromptTemplate
-from langchain.schema import HumanMessage, SystemMessage
+from google import genai
+from google.genai import types
 
 from app.core.config import settings
 from app.services.vector_store import vector_store
@@ -24,17 +22,17 @@ class VerificationService:
     """Service for verifying document claims using AI."""
 
     def __init__(self):
-        """Initialize verification service with Gemini LLM."""
-        self.llm = ChatGoogleGenerativeAI(
-            model=settings.GEMINI_MODEL,
-            google_api_key=settings.GOOGLE_API_KEY,
-            temperature=settings.GEMINI_TEMPERATURE,
-            max_output_tokens=settings.GEMINI_MAX_TOKENS,
-        )
+        """Initialize verification service with Gemini using new google-genai SDK."""
+        # Initialize Google GenAI client
+        api_key = settings.GOOGLE_API_KEY or settings.GEMINI_API_KEY
+        if not api_key:
+            raise ValueError("Either GOOGLE_API_KEY or GEMINI_API_KEY must be set")
 
-        # Verification prompt template (strict citations + conflict handling)
-        self.verification_prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are an expert document verification assistant specializing in IPO documents.
+        self.client = genai.Client(api_key=api_key)
+        self.model = settings.GEMINI_MODEL
+
+        # System prompt for verification
+        self.system_prompt = """You are an expert document verification assistant specializing in IPO documents.
 Your task is to verify claims against supporting evidence from source documents.
 
 For each claim:
@@ -47,9 +45,10 @@ For each claim:
 Classification:
 - VALIDATED: fully supported with high confidence.
 - UNCERTAIN: partial/ambiguous support.
-- INCORRECT: contradicts or lacks support.
-"""),
-            ("human", """Claim to verify:
+- INCORRECT: contradicts or lacks support."""
+
+        # Human prompt template
+        self.verification_template = """Claim to verify:
 "{claim}"
 
 Background Context:
@@ -74,8 +73,7 @@ Respond ONLY with JSON:
 }}
 Rules:
 - VALIDATED or UNCERTAIN requires at least one citation; otherwise set INCORRECT.
-- Use multiple citations if needed to show support and conflicts.""")
-        ])
+- Use multiple citations if needed to show support and conflicts."""
 
     async def verify_sentence(
         self,
@@ -140,16 +138,25 @@ Rules:
             # Format evidence for the prompt
             evidence_text = self._format_evidence(merged)
 
-            # Create prompt
-            messages = self.verification_prompt.format_messages(
+            # Create prompt using new SDK
+            human_prompt = self.verification_template.format(
                 claim=sentence,
                 context=context or "No additional context provided.",
                 evidence=evidence_text
             )
 
-            # Call Gemini
-            response = await self.llm.ainvoke(messages)
-            result = self._parse_verification_response(response.content, similar_chunks)
+            # Call Gemini using new SDK
+            response = await self.client.aio.models.generate_content(
+                model=self.model,
+                contents=human_prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction=self.system_prompt,
+                    temperature=settings.GEMINI_TEMPERATURE,
+                    max_output_tokens=settings.GEMINI_MAX_TOKENS,
+                    response_mime_type='application/json',
+                ),
+            )
+            result = self._parse_verification_response(response.text, merged)
 
             logger.info(f"Verified sentence: {result['validation_result']}")
             return result

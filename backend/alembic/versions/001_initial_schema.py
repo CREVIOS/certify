@@ -21,19 +21,19 @@ def upgrade() -> None:
     # Create ENUM types
     verification_status = postgresql.ENUM(
         'pending', 'indexing', 'processing', 'completed', 'failed',
-        name='verificationstatus'
+        name='verification_status'
     )
     verification_status.create(op.get_bind())
 
     validation_result = postgresql.ENUM(
         'validated', 'uncertain', 'incorrect', 'pending',
-        name='validationresult'
+        name='validation_result'
     )
     validation_result.create(op.get_bind())
 
     document_type = postgresql.ENUM(
         'main', 'supporting',
-        name='documenttype'
+        name='document_type'
     )
     document_type.create(op.get_bind())
 
@@ -303,6 +303,6 @@ def downgrade() -> None:
     op.drop_table('projects')
 
     # Drop ENUM types
-    op.execute("DROP TYPE IF EXISTS documenttype")
-    op.execute("DROP TYPE IF EXISTS validationresult")
-    op.execute("DROP TYPE IF EXISTS verificationstatus")
+    op.execute("DROP TYPE IF EXISTS document_type")
+    op.execute("DROP TYPE IF EXISTS validation_result")
+    op.execute("DROP TYPE IF EXISTS verification_status")

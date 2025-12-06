@@ -23,11 +23,15 @@ import nltk
 
 from app.core.config import settings
 
-# Download NLTK data
+# Check once for NLTK tokenizers; avoid repeated runtime downloads in workers.
 try:
     nltk.data.find('tokenizers/punkt')
+    nltk_available = True
 except LookupError:
-    nltk.download('punkt')
+    nltk_available = False
+    logger.warning("NLTK 'punkt' not found; will fall back to regex sentence split. Pre-install via Docker build.")
+
+# punkt_tab is optional for new NLTK; absence is non-fatal.
 
 
 class DocumentProcessor:
@@ -52,15 +56,15 @@ class DocumentProcessor:
         - Overlap: 10-20% of chunk size to maintain context
         - Separators: Prioritize paragraph > sentence > word boundaries
         """
-        self.chunk_size = chunk_size or settings.CHUNK_SIZE
-        self.chunk_overlap = chunk_overlap or settings.CHUNK_OVERLAP
+        self.chunk_size = chunk_size or settings.CHUNK_SIZE or 1000
+        self.chunk_overlap = chunk_overlap or settings.CHUNK_OVERLAP or 200
         self.use_mistral_ocr = use_mistral_ocr
 
         # Use LangChain's RecursiveCharacterTextSplitter with optimal separators
         # This splits at natural boundaries in order: paragraphs -> sentences -> words
         self.text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=chunk_size,
-            chunk_overlap=chunk_overlap,
+            chunk_size=self.chunk_size,
+            chunk_overlap=self.chunk_overlap,
             length_function=len,
             separators=[
                 "\n\n",    # Double newline (paragraphs)
@@ -261,8 +265,12 @@ class DocumentProcessor:
         sentences = []
         current_pos = 0
 
-        # Use NLTK for better sentence tokenization
-        sent_list = sent_tokenize(text)
+        # Use NLTK for better sentence tokenization; fallback to regex if resources missing
+        if nltk_available:
+            sent_list = sent_tokenize(text)
+        else:
+            import re
+            sent_list = re.split(r'(?<=[.!?])\s+', text)
 
         for idx, sentence in enumerate(sent_list):
             # Find the position in the original text
@@ -329,11 +337,12 @@ class DocumentProcessor:
             dynamic_overlap = 160
 
         # Use temporary splitter with dynamic sizes
+        # Access _separators (private attribute) since separators is not exposed publicly
         adaptive_splitter = RecursiveCharacterTextSplitter(
             chunk_size=dynamic_chunk_size,
             chunk_overlap=dynamic_overlap,
             length_function=len,
-            separators=self.text_splitter.separators,
+            separators=self.text_splitter._separators,
             keep_separator=True,
             is_separator_regex=False,
         )

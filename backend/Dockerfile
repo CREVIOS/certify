@@ -20,7 +20,11 @@ COPY pyproject.toml poetry.lock* ./
 
 # Install dependencies
 RUN poetry config virtualenvs.create false \
-    && poetry install --no-interaction --no-ansi --no-dev
+    && poetry install --no-interaction --no-ansi --only main
+
+# Pre-download NLTK tokenizers to avoid runtime downloads
+ENV NLTK_DATA=/usr/share/nltk_data
+RUN python - <<'PY'\nimport nltk\nnltk.download('punkt')\nnltk.download('punkt_tab')\nPY
 
 # Copy application
 COPY . .
@@ -33,7 +37,7 @@ EXPOSE 8000
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD curl -f http://localhost:8000/api/health || exit 1
+    CMD curl -f http://localhost:8000/health || exit 1
 
 # Run application
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]

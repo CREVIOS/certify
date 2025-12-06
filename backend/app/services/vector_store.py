@@ -5,6 +5,7 @@ from uuid import UUID
 import weaviate
 from weaviate.classes.init import Auth
 from weaviate.classes.query import MetadataQuery
+from weaviate.classes.config import Property, DataType, Configure
 from loguru import logger
 import asyncio
 
@@ -23,21 +24,27 @@ class VectorStoreService:
     def _initialize_client(self):
         """Initialize Weaviate client."""
         try:
+            # Parse the Weaviate URL to extract host and port
+            from urllib.parse import urlparse
+            parsed_url = urlparse(settings.WEAVIATE_URL)
+            host = parsed_url.hostname or 'localhost'
+            port = parsed_url.port or 8080
+
             # Connect to Weaviate
             if settings.WEAVIATE_API_KEY:
                 self.client = weaviate.connect_to_custom(
-                    http_host=settings.WEAVIATE_URL.replace('http://', '').replace('https://', ''),
-                    http_port=8080,
+                    http_host=host,
+                    http_port=port,
                     http_secure=False,
-                    grpc_host=settings.WEAVIATE_URL.replace('http://', '').replace('https://', ''),
+                    grpc_host=host,
                     grpc_port=50051,
                     grpc_secure=False,
                     auth_credentials=Auth.api_key(settings.WEAVIATE_API_KEY),
                 )
             else:
                 self.client = weaviate.connect_to_local(
-                    host=settings.WEAVIATE_URL.replace('http://', '').replace('https://', ''),
-                    port=8080,
+                    host=host,
+                    port=port,
                 )
 
             logger.info("Weaviate client initialized successfully")
@@ -64,48 +71,49 @@ class VectorStoreService:
             self.client.collections.create(
                 name=collection_name,
                 properties=[
-                    {
-                        "name": "content",
-                        "dataType": ["text"],
-                        "description": "Document chunk content"
-                    },
-                    {
-                        "name": "document_id",
-                        "dataType": ["text"],
-                        "description": "Source document ID"
-                    },
-                    {
-                        "name": "chunk_id",
-                        "dataType": ["text"],
-                        "description": "Document chunk ID"
-                    },
-                    {
-                        "name": "page_number",
-                        "dataType": ["int"],
-                        "description": "Page number"
-                    },
-                    {
-                        "name": "start_char",
-                        "dataType": ["int"],
-                        "description": "Start character position"
-                    },
-                    {
-                        "name": "end_char",
-                        "dataType": ["int"],
-                        "description": "End character position"
-                    },
-                    {
-                        "name": "filename",
-                        "dataType": ["text"],
-                        "description": "Source filename"
-                    },
-                    {
-                        "name": "document_type",
-                        "dataType": ["text"],
-                        "description": "Document type (main/supporting)"
-                    }
+                    Property(
+                        name="content",
+                        data_type=DataType.TEXT,
+                        description="Document chunk content",
+                    ),
+                    Property(
+                        name="document_id",
+                        data_type=DataType.TEXT,
+                        description="Source document ID",
+                    ),
+                    Property(
+                        name="chunk_id",
+                        data_type=DataType.TEXT,
+                        description="Document chunk ID",
+                    ),
+                    Property(
+                        name="page_number",
+                        data_type=DataType.INT,
+                        description="Page number",
+                    ),
+                    Property(
+                        name="start_char",
+                        data_type=DataType.INT,
+                        description="Start character position",
+                    ),
+                    Property(
+                        name="end_char",
+                        data_type=DataType.INT,
+                        description="End character position",
+                    ),
+                    Property(
+                        name="filename",
+                        data_type=DataType.TEXT,
+                        description="Source filename",
+                    ),
+                    Property(
+                        name="document_type",
+                        data_type=DataType.TEXT,
+                        description="Document type (main/supporting)",
+                    ),
                 ],
-                vectorizer_config=None  # We'll provide vectors manually
+                # We provide vectors manually via embedding_service, so disable built-in vectorizer
+                vectorizer_config=Configure.Vectorizer.none(),
             )
 
             logger.info(f"Created Weaviate collection: {collection_name}")
@@ -157,38 +165,34 @@ class VectorStoreService:
             collection = self.client.collections.get(collection_name)
 
             weaviate_ids = []
-            batch_size = settings.WEAVIATE_BATCH_SIZE
 
-            # Process in batches
-            for i in range(0, len(chunks), batch_size):
-                batch = chunks[i:i + batch_size]
+            # Embed and send sequentially to avoid any batching issues
+            with collection.batch.dynamic() as batch_context:
+                for idx, chunk in enumerate(chunks):
+                    logger.info(
+                        f"[weaviate] Embedding chunk {idx + 1}/{len(chunks)} "
+                        f"(len={len(chunk['content'])})"
+                    )
 
-                # Generate embeddings for entire batch using OpenAI
-                texts = [chunk["content"] for chunk in batch]
-                vectors = await embedding_service.embed_batch(texts)
+                    vector = await embedding_service.embed_text(chunk["content"])
 
-                with collection.batch.dynamic() as batch_context:
-                    for chunk, vector in zip(batch, vectors):
-                        # Prepare properties
-                        properties = {
-                            "content": chunk["content"],
-                            "document_id": str(document_id),
-                            "chunk_id": chunk.get("id", ""),
-                            "page_number": chunk.get("page_number", 0),
-                            "start_char": chunk.get("start_char", 0),
-                            "end_char": chunk.get("end_char", 0),
-                            "filename": filename,
-                            "document_type": document_type
-                        }
+                    properties = {
+                        "content": chunk["content"],
+                        "document_id": str(document_id),
+                        "chunk_id": chunk.get("id", ""),
+                        "page_number": chunk.get("page_number", 0),
+                        "start_char": chunk.get("start_char", 0),
+                        "end_char": chunk.get("end_char", 0),
+                        "filename": filename,
+                        "document_type": document_type
+                    }
 
-                        # Add to batch
-                        uuid = batch_context.add_object(
-                            properties=properties,
-                            vector=vector
-                        )
-                        weaviate_ids.append(str(uuid))
-
-                logger.info(f"Indexed batch {i//batch_size + 1} ({len(batch)} chunks)")
+                    uuid = batch_context.add_object(
+                        properties=properties,
+                        vector=vector
+                    )
+                    weaviate_ids.append(str(uuid))
+                    logger.info(f"[weaviate] Added chunk {idx + 1}/{len(chunks)} to batch")
 
             logger.info(f"Indexed {len(chunks)} chunks for document {document_id}")
             return weaviate_ids
@@ -223,8 +227,14 @@ class VectorStoreService:
             )
 
             results = []
+            missing_distance = 0
             for obj in response.objects:
-                similarity = 1 - obj.metadata.distance
+                distance = obj.metadata.distance
+                if distance is None:
+                    missing_distance += 1
+                    continue  # semantic results require a distance
+
+                similarity = 1 - distance
                 if similarity >= min_similarity:
                     results.append({
                         "content": obj.properties["content"],
@@ -238,6 +248,9 @@ class VectorStoreService:
                         "similarity": similarity,
                         "source": "semantic"
                     })
+
+            if missing_distance:
+                logger.warning(f"Semantic search skipped {missing_distance} results with missing distance")
 
             logger.info(f"Found {len(results)} semantic chunks for query")
             return results
@@ -275,8 +288,18 @@ class VectorStoreService:
             )
 
             hybrid_results = []
+            missing_distance = 0
             for obj in response.objects:
-                similarity = 1 - obj.metadata.distance
+                distance = obj.metadata.distance
+                if distance is None:
+                    # Keep keyword-only hits but flag them and set minimal similarity
+                    similarity = 0.0
+                    missing_distance += 1
+                    source = "hybrid_keyword_only"
+                else:
+                    similarity = 1 - distance
+                    source = "hybrid"
+
                 hybrid_results.append({
                     "content": obj.properties["content"],
                     "document_id": obj.properties["document_id"],
@@ -287,8 +310,11 @@ class VectorStoreService:
                     "filename": obj.properties.get("filename"),
                     "document_type": obj.properties.get("document_type"),
                     "similarity": similarity,
-                    "source": "hybrid"
+                    "source": source
                 })
+
+            if missing_distance:
+                logger.warning(f"Hybrid search had {missing_distance} keyword-only results without distance")
 
             logger.info(f"Found {len(hybrid_results)} hybrid chunks for query")
             return hybrid_results

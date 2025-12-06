@@ -53,6 +53,14 @@ class VerificationJobSummary(BaseModel):
     completed_at: Optional[datetime] = None
 
 
+class ProjectDetail(ProjectResponse):
+    """Detailed project view with statistics"""
+    document_count: int
+    main_document_count: int
+    supporting_document_count: int
+    verification_job_count: int
+
+
 class ProjectWithStatsResponse(ProjectResponse):
     """Project with full statistics"""
     document_count: int

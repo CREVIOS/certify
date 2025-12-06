@@ -24,6 +24,12 @@ celery_app.conf.update(
     result_serializer='json',
     timezone='UTC',
     enable_utc=True,
+    # Queue defaults – keep everything on the explicitly named "default" queue
+    # instead of Celery's implicit "celery" queue to match the worker's -Q list.
+    task_default_queue='default',
+    task_default_exchange='default',
+    task_default_exchange_type='direct',
+    task_default_routing_key='default',
     task_track_started=settings.CELERY_TASK_TRACK_STARTED,
     task_time_limit=settings.CELERY_TASK_TIME_LIMIT,
     task_soft_time_limit=settings.CELERY_TASK_SOFT_TIME_LIMIT,

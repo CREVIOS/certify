@@ -4,8 +4,9 @@ Pydantic schemas for Document API
 
 from typing import Optional, Dict, Any, List
 from datetime import datetime
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from uuid import UUID
+from typing import List
 
 
 class DocumentResponse(BaseModel):
@@ -21,11 +22,12 @@ class DocumentResponse(BaseModel):
     page_count: Optional[int] = None
     indexed: bool
     indexed_at: Optional[datetime] = None
-    metadata: Dict[str, Any] = {}
+    metadata: Dict[str, Any] = Field(default={}, alias="metadata_")
     created_at: datetime
 
     class Config:
         from_attributes = True
+        populate_by_name = True
 
 
 class DocumentUploadResponse(BaseModel):
@@ -41,7 +43,10 @@ class DocumentUploadResponse(BaseModel):
 class DocumentUpdate(BaseModel):
     """Updatable fields for a document."""
     filename: Optional[str] = None
-    metadata: Optional[Dict[str, Any]] = None
+    metadata_: Optional[Dict[str, Any]] = Field(default=None, alias="metadata")
+
+    class Config:
+        populate_by_name = True
 
 
 class SectionSchema(BaseModel):
@@ -57,3 +62,9 @@ class SectionSuggestionResponse(BaseModel):
     document_id: UUID
     sections: List[SectionSchema]
     model: str
+
+
+class DocumentSectionsResponse(BaseModel):
+    """Sections persisted for a document."""
+    document_id: UUID
+    sections: List[SectionSchema]

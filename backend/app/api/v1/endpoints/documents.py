@@ -1,6 +1,7 @@
 """Document endpoints with Supabase Storage integration."""
 
 import os
+import re
 import shutil
 import json
 from typing import List
@@ -24,7 +25,7 @@ from app.core.config import settings
 from app.tasks.document_tasks import index_document_task, index_project_documents_task
 from app.services.storage_service import storage_service
 from app.services.document_processor import DocumentProcessor
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_openai import ChatOpenAI
 
 router = APIRouter()
 
@@ -357,31 +358,72 @@ async def suggest_document_sections(
         text = extraction.get("full_text", "")[:15000]  # cap tokens for speed
         page_hint = extraction.get("page_count") or len(extraction.get("pages", [])) or 1
 
-        llm = ChatGoogleGenerativeAI(
-            model=settings.GEMINI_MODEL,
-            google_api_key=settings.GEMINI_API_KEY or settings.GOOGLE_API_KEY,
-            temperature=0.1,
-            max_output_tokens=1024,
+        llm = ChatOpenAI(
+            model="gpt-5-mini",  # OpenAI mini model
+            api_key=settings.OPENAI_API_KEY,
+            max_tokens=1024,
         )
 
         prompt = (
-            "You are structuring an IPO prospectus. "
-            "Given the raw text below, propose concise sections the reviewer can edit. "
-            "Return 8-15 sections max. "
-            "Each section must have: title, start_page (int >=1), end_page (int >= start_page), "
-            "and a one-sentence summary. "
-            "Be conservative with page spans; estimate using page numbers mentioned in text when possible; "
-            f"assume total pages around {page_hint}. "
-            "Respond with JSON: {\"sections\": [{\"title\": str, \"start_page\": int, "
-            "\"end_page\": int, \"summary\": str}]}."
+            "You are structuring an IPO prospectus.\n"
+            "- Given the raw text below, propose concise sections the reviewer can edit.\n"
+            "- Return 8-15 sections max.\n"
+            "- Each section must have: title, start_page (int >=1), end_page (int >= start_page), "
+            "and a one-sentence summary.\n"
+            "- Be conservative with page spans; estimate using page numbers mentioned in text when possible; "
+            f"assume total pages around {page_hint}.\n"
+            "- OUTPUT FORMAT: return ONLY valid JSON, **no markdown fences**, **no code block labels**, **no extra text**.\n"
+            '- Exact schema: { "sections": [ { "title": "string", "start_page": 1, '
+            '"end_page": 2, "summary": "string" } ] }\n'
+            "- The first and last characters of your reply must be '{' and '}' so it parses with json.loads.\n"
         )
 
         response = await llm.ainvoke(prompt + "\n\nTEXT:\n" + text)
+
+        # Normalize Gemini response content (handles list-of-chunks format)
+        raw_content = response.content or ""
+        if isinstance(raw_content, list):
+            raw_content = "".join(
+                part.get("text", "") if isinstance(part, dict) else str(part)
+                for part in raw_content
+            )
+        raw_content = str(raw_content).strip()
+
+        # Strip markdown fences and pull out JSON payload
+        if raw_content.startswith("```"):
+            raw_content = raw_content.strip("`")
+            if raw_content.lower().startswith("json"):
+                raw_content = raw_content[4:].strip()
+
+        match = re.search(r"\{[\s\S]*\}", raw_content)
+        content_to_parse = match.group(0) if match else raw_content
+
         try:
-            payload = json.loads(response.content)
+            payload = json.loads(content_to_parse)
             sections_raw = payload.get("sections", [])
         except Exception:
-            sections_raw = []
+            logger.warning(f"Gemini section suggestion returned unparsable content: {raw_content}")
+            # Fallback: return a single full-document section instead of 502
+            fallback_sections = [
+                SectionSchema(
+                    title="Full Document",
+                    start_page=1,
+                    end_page=max(1, int(page_hint)),
+                    summary="Fallback section because the model response was not valid JSON."
+                )
+            ]
+            return SectionSuggestionResponse(
+                document_id=document_id,
+                sections=fallback_sections,
+                model=settings.GEMINI_MODEL
+            )
+
+        if not sections_raw:
+            logger.warning("Gemini section suggestion returned no sections")
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Section suggestion returned no sections"
+            )
 
         sections: List[SectionSchema] = []
         for sec in sections_raw:
@@ -398,7 +440,7 @@ async def suggest_document_sections(
         return SectionSuggestionResponse(
             document_id=document_id,
             sections=sections,
-            model=settings.GEMINI_MODEL
+            model="gpt-5-mini"  # reflect actual model used
         )
 
     except HTTPException:
@@ -409,6 +451,8 @@ async def suggest_document_sections(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error suggesting sections: {str(e)}"
         )
+
+
 
 
 @router.delete("/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
