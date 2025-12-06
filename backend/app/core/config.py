@@ -91,10 +91,25 @@ class Settings(BaseSettings):
     LANGCHAIN_TRACING_V2: bool = False
     LANGCHAIN_API_KEY: str = ""
 
+    # Cohere Rerank (optional, for higher-precision retrieval)
+    COHERE_API_KEY: str = ""
+    COHERE_RERANK_MODEL: str = "rerank-v3.5"
+
     # Verification Settings
     USE_CROSS_VALIDATION: bool = True  # Cross-validate GPT-4 with Gemini
     CONFIDENCE_THRESHOLD_VALIDATED: float = 0.8
     CONFIDENCE_THRESHOLD_UNCERTAIN: float = 0.6
+    VERIFICATION_BATCH_SIZE: int = 5
+    VERIFICATION_CONCURRENCY: int = 4
+    # Retrieval/Chunking
+    CHUNK_SIZE: int = 1200            # default for clean text
+    CHUNK_OVERLAP: int = 180
+    MIN_SIMILARITY_THRESHOLD: float = 0.6
+    SEMANTIC_TOP_K: int = 30          # retrieve up to 20-30 chunks as requested
+    KEYWORD_TOP_K: int = 20
+    HYBRID_ALPHA: float = 0.65        # balance between semantic and keyword in hybrid search
+    RERANK_CANDIDATES: int = 60
+    RERANK_TOP_K: int = 20            # send only top-N to LLM
 
     # File Upload
     MAX_UPLOAD_SIZE: int = 104857600  # 100MB

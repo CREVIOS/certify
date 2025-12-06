@@ -107,7 +107,7 @@ async def _index_document_async(
                 for chunk in chunk_records
             ]
 
-            weaviate_ids = vector_store.index_chunks(
+            weaviate_ids = await vector_store.index_chunks(
                 project_id=project_id,
                 chunks=chunks_for_indexing,
                 document_id=document_id,

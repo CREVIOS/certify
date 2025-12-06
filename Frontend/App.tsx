@@ -1,13 +1,24 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { SupportingDocument, IPODocument, VerificationStatus } from './types';
+import { SupportingDocument, IPODocument, VerificationStatus, Section } from './types';
 import LeftSidebar from './components/LeftSidebar';
 import RightSidebar from './components/RightSidebar';
 import DocumentViewer from './components/DocumentViewer';
 import AuditPanel from './components/AuditPanel';
-import { indexSingleDocument, analyzeIPODocumentRAG } from './services/geminiService';
+import SectionModal from './components/SectionModal';
+import {
+  ensureProject,
+  uploadDocument,
+  indexDocument,
+  pollDocumentIndexed,
+  createVerificationJob,
+  startVerificationJob,
+  pollVerificationJob,
+  reviewSentence,
+  suggestSections,
+  updateDocument,
+} from './services/api';
 import { downloadVerificationReport } from './utils/exportUtils';
-import { segmentTextIntoSentences } from './utils/textParsing';
 import { extractTextFromPDF } from './utils/pdfHelpers';
 import { ShieldCheck, Download, Loader2, FileUp, UploadCloud, PanelLeftClose, PanelLeftOpen, FileText, ClipboardCheck } from 'lucide-react';
 
@@ -45,8 +56,31 @@ const App: React.FC = () => {
   
   const [supportingDocs, setSupportingDocs] = useState<SupportingDocument[]>([]);
   const [ipoDoc, setIpoDoc] = useState<IPODocument | null>(null);
+  const [projectId, setProjectId] = useState<string | null>(null);
+  const [mainDocumentId, setMainDocumentId] = useState<string | null>(null);
+  const [sections, setSections] = useState<Section[]>([]);
+  const [showSectionModal, setShowSectionModal] = useState(false);
   const [activeSentenceId, setActiveSentenceId] = useState<number | null>(null);
   const mainDocInputRef = useRef<HTMLInputElement>(null);
+
+  const pendingSupportDocs = supportingDocs.filter(d => !d.isIndexed).length;
+
+  const ensureDefaultProject = async () => {
+    try {
+      const project = await ensureProject('IPO Verification Workspace');
+      setProjectId(project.id);
+    } catch (err) {
+      console.error(err);
+      alert('Unable to initialize project. Check backend connectivity.');
+    }
+  };
+
+  const mapValidationResult = (value: string): VerificationStatus => {
+    const normalized = (value || '').toLowerCase();
+    if (normalized === 'validated' || normalized === 'verified') return VerificationStatus.VERIFIED;
+    if (normalized === 'incorrect') return VerificationStatus.UNVERIFIED;
+    return VerificationStatus.PARTIAL;
+  };
 
   // Handle responsive breakdown
   useEffect(() => {
@@ -69,6 +103,11 @@ const App: React.FC = () => {
     handleResize();
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  // Ensure a project exists on load
+  useEffect(() => {
+    ensureDefaultProject();
   }, []);
 
   // Handle left sidebar resize
@@ -130,6 +169,9 @@ const App: React.FC = () => {
   const processMainFile = async (file: File) => {
     setIsParsing(true);
     try {
+      if (!projectId) await ensureDefaultProject();
+
+      // Extract text locally for preview/highlight
       let text = '';
       if (file.type === 'application/pdf') {
         text = await extractTextFromPDF(file);
@@ -137,19 +179,28 @@ const App: React.FC = () => {
         text = await file.text();
       }
 
-      const sentences = segmentTextIntoSentences(text);
-      
-      setIpoDoc({
-        id: file.name,
+      const tempDoc: IPODocument = {
+        id: `temp-${Date.now()}`,
         title: file.name.replace(/\.[^/.]+$/, ""),
         content: text,
-        sentences: sentences,
-        file: file 
-      });
-      
+        sentences: [],
+        file: file,
+        sections: []
+      };
+      setIpoDoc(tempDoc);
       setActiveSentenceId(null);
-      // Reset to PDF view when loading new document
       setViewMode('pdf');
+
+      // Upload to backend and trigger indexing
+      const uploaded = await uploadDocument(file, projectId as string, 'main');
+      setMainDocumentId(uploaded.document_id);
+      setIpoDoc((prev) => prev ? { ...prev, id: uploaded.document_id } : null);
+
+      await indexDocument(uploaded.document_id);
+      await pollDocumentIndexed(uploaded.document_id);
+
+      // Prompt user to section the IPO
+      setShowSectionModal(true);
     } catch (err) {
       console.error("PDF processing error:", err);
       const errorMessage = err instanceof Error ? err.message : "Error reading file. Please ensure it is a valid text-based PDF.";
@@ -188,67 +239,88 @@ const App: React.FC = () => {
   };
 
   const handleUploadEvidence = async (file: File, content: string) => {
+    if (!projectId) await ensureDefaultProject();
+
     const tempId = `DOC-${String(supportingDocs.length + 1).padStart(3, '0')}`;
-    
     const newDoc: SupportingDocument = {
       id: tempId,
       name: file.name,
       type: 'uploaded',
       uploadDate: new Date().toISOString().split('T')[0],
-      content: content,
-      isIndexed: false 
+      content,
+      isIndexed: false,
     };
-    
     setSupportingDocs(prev => [...prev, newDoc]);
 
     try {
-      const indexedDoc = await indexSingleDocument(newDoc);
-      setSupportingDocs(prev => prev.map(d => d.id === tempId ? indexedDoc : d));
+      const uploaded = await uploadDocument(file, projectId as string, 'supporting');
+      const backendId = uploaded.document_id;
+
+      // Replace temp id with backend id
+      setSupportingDocs(prev => prev.map(d => d.id === tempId ? { ...d, id: backendId, backendId } : d));
+
+      await indexDocument(backendId);
+      await pollDocumentIndexed(backendId);
+
+      setSupportingDocs(prev => prev.map(d => d.id === backendId ? { ...d, isIndexed: true } : d));
     } catch (err) {
       console.error("Indexing failed", err);
+      alert("Failed to index supporting document.");
     }
   };
 
   const handleAnalyze = async () => {
-    if (!ipoDoc || supportingDocs.length === 0) {
+    if (!ipoDoc || !mainDocumentId || supportingDocs.length === 0) {
       alert("Please upload both an IPO Prospectus and at least one Supporting Document.");
       return;
     }
 
-    const pendingDocs = supportingDocs.filter(d => !d.isIndexed);
-    if (pendingDocs.length > 0) {
-      alert(`Please wait for ${pendingDocs.length} document(s) to finish indexing.`);
+    if (pendingSupportDocs > 0) {
+      alert(`Please wait for ${pendingSupportDocs} supporting document(s) to finish indexing.`);
       return;
     }
 
     setIsAnalyzing(true);
-    
+
     try {
-      setLoadingStage('Verifying Claims...');
-      setIndexingProgress(0); 
-      
-      const verifiedSentences = await analyzeIPODocumentRAG(
-        ipoDoc.sentences, 
-        supportingDocs,
-        (count) => {
-             setIndexingProgress(Math.round((count / ipoDoc.sentences.length) * 100));
-        }
-      );
-      
-      setIpoDoc(prev => prev ? ({
-        ...prev,
-        sentences: verifiedSentences
-      }) : null);
-      
-      if (verifiedSentences.length > 0) {
-        setActiveSentenceId(0);
+      if (sections.length && mainDocumentId) {
+        await updateDocument(mainDocumentId, { metadata: { sections } });
       }
-      
-      // Auto-switch to audit view after analysis completes
+
+      setLoadingStage('Starting verification...');
+      setIndexingProgress(0); 
+
+      const job = await createVerificationJob(projectId as string, mainDocumentId);
+      await startVerificationJob(job.id);
+
+      const completedJob = await pollVerificationJob(job.id, (p) => setIndexingProgress(Math.round(p)));
+
+      if (['failed', 'FAILED'].includes(completedJob.status)) {
+        throw new Error(completedJob.error_message || 'Verification failed');
+      }
+
+      const mappedSentences = (completedJob.sentences || []).map((s: any, idx: number) => ({
+        id: idx,
+        backendId: s.id,
+        text: s.content,
+        status: mapValidationResult(s.validation_result),
+        reasoning: s.reasoning,
+        citationText: s.citations?.[0]?.cited_text,
+        citationSourceId: s.citations?.[0]?.source_document_id || s.citations?.[0]?.document_id,
+        confidence: Math.round((s.confidence_score || 0) * 100),
+        pageNumber: s.page_number
+      }));
+
+      setIpoDoc(prev => prev ? ({ ...prev, sentences: mappedSentences }) : null);
+
+      if (mappedSentences.length > 0) {
+        setActiveSentenceId(mappedSentences[0].id);
+      }
+
       setViewMode('audit');
     } catch (error) {
       console.error("Error verifying document:", error);
-      alert("Failed to verify document. Check console or API Key.");
+      alert("Failed to verify document. Check console or API for details.");
     } finally {
       setIsAnalyzing(false);
       setLoadingStage('');
@@ -256,8 +328,12 @@ const App: React.FC = () => {
     }
   };
 
-  const handleApprove = (id: number) => {
+  const handleApprove = async (id: number) => {
     if (!ipoDoc) return;
+    const target = ipoDoc.sentences.find(s => s.id === id);
+    if (target?.backendId) {
+      await reviewSentence(target.backendId, 'validated');
+    }
     setIpoDoc(prev => prev ? ({
       ...prev,
       sentences: prev.sentences.map(s => 
@@ -266,8 +342,12 @@ const App: React.FC = () => {
     }) : null);
   };
 
-  const handleReject = (id: number) => {
+  const handleReject = async (id: number) => {
     if (!ipoDoc) return;
+    const target = ipoDoc.sentences.find(s => s.id === id);
+    if (target?.backendId) {
+      await reviewSentence(target.backendId, 'incorrect');
+    }
     setIpoDoc(prev => prev ? ({
       ...prev,
       sentences: prev.sentences.map(s => 
@@ -285,6 +365,41 @@ const App: React.FC = () => {
     // Clear active sentence if it was deleted
     if (activeSentenceId === id) {
       setActiveSentenceId(null);
+    }
+  };
+
+  const handleSaveSections = async (secs: Section[]) => {
+    setSections(secs);
+    setIpoDoc(prev => prev ? { ...prev, sections: secs } : prev);
+    if (mainDocumentId) {
+      try {
+        await updateDocument(mainDocumentId, { metadata: { sections: secs } });
+      } catch (err) {
+        console.error(err);
+      }
+    }
+  };
+
+  const handleAiSuggestSections = async (): Promise<Section[]> => {
+    if (!mainDocumentId) throw new Error('Main document not ready');
+    const res = await suggestSections(mainDocumentId);
+    setSections(res.sections);
+    return res.sections;
+  };
+
+  const handleSentenceUpdate = async (id: number, updates: Partial<IPODocument['sentences'][number]>) => {
+    const sentence = ipoDoc?.sentences.find(s => s.id === id);
+    setIpoDoc(prev => prev ? ({
+      ...prev,
+      sentences: prev.sentences.map(s => s.id === id ? { ...s, ...updates } : s)
+    }) : null);
+
+    // Push review changes to backend if status changed
+    if (sentence?.backendId && updates.status) {
+      const status = updates.status;
+      if (status === VerificationStatus.VERIFIED) await reviewSentence(sentence.backendId, 'validated');
+      else if (status === VerificationStatus.UNVERIFIED) await reviewSentence(sentence.backendId, 'incorrect');
+      else if (status === VerificationStatus.PARTIAL) await reviewSentence(sentence.backendId, 'uncertain');
     }
   };
 
@@ -429,6 +544,7 @@ const App: React.FC = () => {
               isAnalyzing={isAnalyzing}
               hasIpoDoc={!!ipoDoc}
               indexingProgress={indexingProgress}
+              pendingCount={pendingSupportDocs}
             />
           </div>
           
@@ -471,14 +587,7 @@ const App: React.FC = () => {
                  documents={supportingDocs}
                  activeSentenceId={activeSentenceId}
                  onSentenceClick={(s) => setActiveSentenceId(s.id)}
-                 onSentenceUpdate={(id, updates) => {
-                   setIpoDoc(prev => prev ? {
-                     ...prev,
-                     sentences: prev.sentences.map(s => 
-                       s.id === id ? { ...s, ...updates } : s
-                     )
-                   } : null);
-                 }}
+                 onSentenceUpdate={handleSentenceUpdate}
                  onSentenceDelete={handleDeleteSentence}
                />
              )
@@ -590,6 +699,13 @@ const App: React.FC = () => {
           </div>
         )}
       </div>
+
+      <SectionModal 
+        open={showSectionModal}
+        onClose={() => setShowSectionModal(false)}
+        onSave={handleSaveSections}
+        onAiSuggest={handleAiSuggestSections}
+      />
     </div>
   );
 };

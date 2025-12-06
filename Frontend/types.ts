@@ -6,6 +6,13 @@ export enum VerificationStatus {
   PENDING = 'PENDING'
 }
 
+export interface Section {
+  title: string;
+  start_page: number;
+  end_page: number;
+  summary?: string;
+}
+
 export interface SupportingDocument {
   id: string;
   name: string;
@@ -14,6 +21,7 @@ export interface SupportingDocument {
   uploadDate: string;
   isIndexed?: boolean; // Track if embeddings are generated
   chunkCount?: number;
+  backendId?: string;
 }
 
 export interface DocumentChunk {
@@ -25,6 +33,7 @@ export interface DocumentChunk {
 
 export interface VerifiedSentence {
   id: number;
+  backendId?: string;
   text: string;
   status: VerificationStatus;
   reasoning?: string;
@@ -32,6 +41,7 @@ export interface VerifiedSentence {
   citationText?: string;
   confidence?: number;
   isParagraphEnd?: boolean;
+  pageNumber?: number;
 }
 
 export interface IPODocument {
@@ -40,4 +50,5 @@ export interface IPODocument {
   content: string;
   sentences: VerifiedSentence[];
   file?: File;
+  sections?: Section[];
 }

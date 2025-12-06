@@ -101,25 +101,24 @@ async def _run_verification_async(job_id: UUID, task_id: str):
             job.total_sentences = len(sentences)
             await session.commit()
 
-            # Verify sentences in batches
+            # Verify sentences with bounded concurrency
             batch_size = settings.VERIFICATION_BATCH_SIZE
+            max_concurrent = settings.VERIFICATION_CONCURRENCY if hasattr(settings, "VERIFICATION_CONCURRENCY") else 4
+            semaphore = asyncio.Semaphore(max_concurrent)
             validated_count = 0
             uncertain_count = 0
             incorrect_count = 0
 
-            for i in range(0, len(sentences), batch_size):
-                batch = sentences[i:i + batch_size]
-
-                for sentence_data in batch:
+            async def verify_one(sentence_data):
+                nonlocal validated_count, uncertain_count, incorrect_count
+                async with semaphore:
                     try:
-                        # Verify sentence
                         verification_result = await verification_service.verify_sentence(
                             sentence=sentence_data["content"],
                             project_id=job.project_id,
                             context=project.background_context if project else ""
                         )
 
-                        # Create verified sentence record
                         verified_sentence = VerifiedSentence(
                             verification_job_id=job_id,
                             sentence_index=sentence_data["index"],
@@ -135,7 +134,6 @@ async def _run_verification_async(job_id: UUID, task_id: str):
 
                         session.add(verified_sentence)
 
-                        # Update counts
                         if verification_result["validation_result"] == ValidationResult.VALIDATED:
                             validated_count += 1
                         elif verification_result["validation_result"] == ValidationResult.UNCERTAIN:
@@ -143,8 +141,7 @@ async def _run_verification_async(job_id: UUID, task_id: str):
                         elif verification_result["validation_result"] == ValidationResult.INCORRECT:
                             incorrect_count += 1
 
-                        # Update progress
-                        job.verified_sentences = i + len(batch)
+                        job.verified_sentences += 1
                         job.progress = (job.verified_sentences / job.total_sentences) * 100
                         job.validated_count = validated_count
                         job.uncertain_count = uncertain_count
@@ -152,12 +149,6 @@ async def _run_verification_async(job_id: UUID, task_id: str):
 
                         await session.commit()
 
-                        logger.info(
-                            f"Verified sentence {sentence_data['index'] + 1}/{len(sentences)}: "
-                            f"{verification_result['validation_result'].value}"
-                        )
-
-                        # Send real-time update via WebSocket
                         await send_verification_progress(
                             job_id=job_id,
                             status=VerificationStatus.PROCESSING,
@@ -166,9 +157,17 @@ async def _run_verification_async(job_id: UUID, task_id: str):
                             total_sentences=job.total_sentences
                         )
 
+                        logger.info(
+                            f"Verified sentence {sentence_data['index'] + 1}/{len(sentences)}: "
+                            f"{verification_result['validation_result'].value}"
+                        )
                     except Exception as e:
                         logger.error(f"Error verifying sentence {sentence_data['index']}: {e}")
-                        # Continue with next sentence
+
+            # Process in batches but with concurrency inside each batch
+            for i in range(0, len(sentences), batch_size):
+                batch = sentences[i:i + batch_size]
+                await asyncio.gather(*(verify_one(s) for s in batch))
 
             # Mark job as completed
             job.status = VerificationStatus.COMPLETED

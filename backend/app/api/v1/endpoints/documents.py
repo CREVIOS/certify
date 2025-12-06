@@ -2,6 +2,7 @@
 
 import os
 import shutil
+import json
 from typing import List
 from uuid import UUID, uuid4
 from pathlib import Path
@@ -12,10 +13,18 @@ from loguru import logger
 
 from app.db.session import get_db
 from app.db.models import Document, Project, DocumentType
-from app.schemas.document import DocumentResponse, DocumentUpdate, DocumentUploadResponse
+from app.schemas.document import (
+    DocumentResponse,
+    DocumentUpdate,
+    DocumentUploadResponse,
+    SectionSuggestionResponse,
+    SectionSchema,
+)
 from app.core.config import settings
 from app.tasks.document_tasks import index_document_task, index_project_documents_task
 from app.services.storage_service import storage_service
+from app.services.document_processor import DocumentProcessor
+from langchain_google_genai import ChatGoogleGenerativeAI
 
 router = APIRouter()
 
@@ -107,12 +116,16 @@ async def upload_document(
 
         logger.info(f"Uploaded document {document.id}: {file.filename}")
 
+        # Kick off async indexing in Celery to keep request light
+        task = index_document_task.delay(str(document.id), str(project_id))
+
         return DocumentUploadResponse(
             document_id=document.id,
             filename=file.filename,
             file_size=file_size,
             document_type=document_type,
-            message="Document uploaded successfully. Use /documents/index to index it."
+            task_id=task.id,
+            message="Document uploaded and indexing started."
         )
 
     except HTTPException:
@@ -304,6 +317,97 @@ async def update_document(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error updating document: {str(e)}"
+        )
+
+
+@router.post("/{document_id}/sections/suggest", response_model=SectionSuggestionResponse)
+async def suggest_document_sections(
+    document_id: UUID,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Suggest IPO sections using Gemini based on the uploaded main document.
+    Returns lightweight title/start_page/end_page suggestions for user review.
+    """
+    try:
+        # Fetch document
+        result = await db.execute(
+            select(Document).where(Document.id == document_id)
+        )
+        document = result.scalar_one_or_none()
+
+        if not document:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Document not found"
+            )
+
+        if document.document_type != DocumentType.MAIN:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Sectioning is only supported for main IPO documents"
+            )
+
+        # Extract text (limit to keep prompt lean)
+        processor = DocumentProcessor(
+            chunk_size=settings.CHUNK_SIZE,
+            chunk_overlap=settings.CHUNK_OVERLAP
+        )
+        extraction = await processor.extract_text(document.file_path)
+        text = extraction.get("full_text", "")[:15000]  # cap tokens for speed
+        page_hint = extraction.get("page_count") or len(extraction.get("pages", [])) or 1
+
+        llm = ChatGoogleGenerativeAI(
+            model=settings.GEMINI_MODEL,
+            google_api_key=settings.GEMINI_API_KEY or settings.GOOGLE_API_KEY,
+            temperature=0.1,
+            max_output_tokens=1024,
+        )
+
+        prompt = (
+            "You are structuring an IPO prospectus. "
+            "Given the raw text below, propose concise sections the reviewer can edit. "
+            "Return 8-15 sections max. "
+            "Each section must have: title, start_page (int >=1), end_page (int >= start_page), "
+            "and a one-sentence summary. "
+            "Be conservative with page spans; estimate using page numbers mentioned in text when possible; "
+            f"assume total pages around {page_hint}. "
+            "Respond with JSON: {\"sections\": [{\"title\": str, \"start_page\": int, "
+            "\"end_page\": int, \"summary\": str}]}."
+        )
+
+        response = await llm.ainvoke(prompt + "\n\nTEXT:\n" + text)
+        try:
+            payload = json.loads(response.content)
+            sections_raw = payload.get("sections", [])
+        except Exception:
+            sections_raw = []
+
+        sections: List[SectionSchema] = []
+        for sec in sections_raw:
+            try:
+                sections.append(SectionSchema(
+                    title=sec.get("title", "Untitled"),
+                    start_page=int(sec.get("start_page", 1)),
+                    end_page=int(sec.get("end_page", sec.get("start_page", 1))),
+                    summary=sec.get("summary")
+                ))
+            except Exception:
+                continue
+
+        return SectionSuggestionResponse(
+            document_id=document_id,
+            sections=sections,
+            model=settings.GEMINI_MODEL
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error suggesting sections: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error suggesting sections: {str(e)}"
         )
 
 
