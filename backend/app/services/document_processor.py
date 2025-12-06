@@ -35,8 +35,8 @@ class DocumentProcessor:
 
     def __init__(
         self,
-        chunk_size: int = 1000,
-        chunk_overlap: int = 200,
+        chunk_size: int = None,
+        chunk_overlap: int = None,
         use_mistral_ocr: bool = True
     ):
         """
@@ -52,8 +52,8 @@ class DocumentProcessor:
         - Overlap: 10-20% of chunk size to maintain context
         - Separators: Prioritize paragraph > sentence > word boundaries
         """
-        self.chunk_size = chunk_size
-        self.chunk_overlap = chunk_overlap
+        self.chunk_size = chunk_size or settings.CHUNK_SIZE
+        self.chunk_overlap = chunk_overlap or settings.CHUNK_OVERLAP
         self.use_mistral_ocr = use_mistral_ocr
 
         # Use LangChain's RecursiveCharacterTextSplitter with optimal separators
@@ -103,24 +103,17 @@ class DocumentProcessor:
             Dict containing full text, pages, and metadata
         """
         try:
-            # Try Mistral OCR first if enabled
-            if self.use_mistral_ocr and self.mistral_service:
-                try:
-                    logger.info(f"Using Mistral OCR for PDF extraction: {file_path}")
-                    result = await self.mistral_service.extract_text_from_pdf_ocr(file_path)
-                    logger.info(f"Mistral OCR extracted {result['page_count']} pages from: {file_path}")
-                    return result
-                except Exception as ocr_error:
-                    logger.warning(f"Mistral OCR failed: {ocr_error}. Falling back to pdfplumber.")
-
-            # Fallback to pdfplumber
+            # Primary pass: pdfplumber
             logger.info(f"Using pdfplumber for PDF extraction: {file_path}")
             pages = []
             full_text = ""
+            text_found = False
 
             with pdfplumber.open(file_path) as pdf:
                 for page_num, page in enumerate(pdf.pages, 1):
                     text = page.extract_text() or ""
+                    if text.strip():
+                        text_found = True
                     pages.append({
                         "page_number": page_num,
                         "text": text,
@@ -134,6 +127,16 @@ class DocumentProcessor:
                     "metadata": pdf.metadata or {},
                     "extraction_method": "pdfplumber"
                 }
+
+            # If no text (scanned PDF) and OCR enabled, fall back to Mistral
+            if (not text_found or len(full_text.strip()) == 0) and self.use_mistral_ocr and self.mistral_service:
+                try:
+                    logger.info(f"No selectable text found; using Mistral OCR for {file_path}")
+                    result = await self.mistral_service.extract_text_from_pdf_ocr(file_path)
+                    result["metadata"]["extraction_method"] = "ocr"
+                    return result
+                except Exception as ocr_error:
+                    logger.warning(f"Mistral OCR failed: {ocr_error}. Returning pdfplumber output.")
 
             logger.info(f"Extracted {len(pages)} pages from PDF: {file_path}")
 
@@ -315,11 +318,38 @@ class DocumentProcessor:
         # Extract text
         extraction_result = await self.extract_text(file_path)
 
-        # Create chunks
-        chunks = self.create_chunks(
-            extraction_result["full_text"],
-            metadata=extraction_result.get("metadata", {})
+        # Adaptive chunk sizing: tighter chunks for OCR / low-text pages
+        dynamic_chunk_size = self.chunk_size
+        dynamic_overlap = self.chunk_overlap
+        pages = extraction_result.get("pages", [])
+        avg_chars = sum(len(p.get("text", "")) for p in pages) / max(len(pages), 1) if pages else len(extraction_result.get("full_text", "")) or 0
+        is_ocr = extraction_result.get("metadata", {}).get("extraction_method") == "ocr"
+        if is_ocr or avg_chars < 1500:
+            dynamic_chunk_size = 800
+            dynamic_overlap = 160
+
+        # Use temporary splitter with dynamic sizes
+        adaptive_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=dynamic_chunk_size,
+            chunk_overlap=dynamic_overlap,
+            length_function=len,
+            separators=self.text_splitter.separators,
+            keep_separator=True,
+            is_separator_regex=False,
         )
+
+        chunks = []
+        current_pos = 0
+        for idx, chunk in enumerate(adaptive_splitter.split_text(extraction_result["full_text"])):
+            chunk_dict = {
+                "index": idx,
+                "content": chunk,
+                "start_char": current_pos,
+                "end_char": current_pos + len(chunk),
+                "metadata": extraction_result.get("metadata", {})
+            }
+            chunks.append(chunk_dict)
+            current_pos += len(chunk)
 
         # Add page information if available
         if extraction_result.get("pages"):

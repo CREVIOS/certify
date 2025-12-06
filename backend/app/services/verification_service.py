@@ -1,6 +1,6 @@
 """Verification service using Langchain and Google Gemini."""
 
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Optional
 from uuid import UUID
 from loguru import logger
 
@@ -10,6 +10,13 @@ from langchain.schema import HumanMessage, SystemMessage
 
 from app.core.config import settings
 from app.services.vector_store import vector_store
+from app.services.embedding_service import embedding_service
+
+try:
+    import cohere
+    from cohere import ClientV2
+except ImportError:
+    cohere = None
 from app.db.models import ValidationResult
 
 
@@ -25,24 +32,23 @@ class VerificationService:
             max_output_tokens=settings.GEMINI_MAX_TOKENS,
         )
 
-        # Verification prompt template
+        # Verification prompt template (strict citations + conflict handling)
         self.verification_prompt = ChatPromptTemplate.from_messages([
             ("system", """You are an expert document verification assistant specializing in IPO documents.
-Your task is to verify claims made in IPO documents against supporting evidence from source documents.
+Your task is to verify claims against supporting evidence from source documents.
 
-For each claim, you must:
-1. Analyze the claim carefully
-2. Review all provided evidence from supporting documents
-3. Determine if the claim is VALIDATED, UNCERTAIN, or INCORRECT
-4. Provide detailed reasoning for your assessment
-5. Cite specific evidence that supports or contradicts the claim
+For each claim:
+1) Analyze the claim carefully.
+2) Review all evidence provided (with page numbers).
+3) Decide VALIDATED, UNCERTAIN, or INCORRECT.
+4) Explain reasoning and cite exact quotes with page numbers.
+5) If evidence conflicts, choose INCORRECT unless a clear majority supports the claim; mention conflicts explicitly.
 
-Classification criteria:
-- VALIDATED (Green): The claim is fully supported by evidence from supporting documents with high confidence
-- UNCERTAIN (Yellow): The claim is partially supported, evidence is ambiguous, or confidence is moderate
-- INCORRECT (Red): The claim contradicts evidence or is not supported by any evidence
-
-Be thorough, objective, and cite specific page numbers and quotes."""),
+Classification:
+- VALIDATED: fully supported with high confidence.
+- UNCERTAIN: partial/ambiguous support.
+- INCORRECT: contradicts or lacks support.
+"""),
             ("human", """Claim to verify:
 "{claim}"
 
@@ -52,21 +58,23 @@ Background Context:
 Supporting Evidence from Documents:
 {evidence}
 
-Based on the evidence, classify this claim as VALIDATED, UNCERTAIN, or INCORRECT.
-Provide your response in the following JSON format:
+Respond ONLY with JSON:
 {{
-    "validation_result": "VALIDATED|UNCERTAIN|INCORRECT",
-    "confidence_score": 0.0-1.0,
-    "reasoning": "Detailed explanation of your assessment",
-    "citations": [
-        {{
-            "document": "filename",
-            "page": page_number,
-            "quote": "exact quote from source",
-            "relevance": "how this evidence relates to the claim"
-        }}
-    ]
-}}""")
+  "validation_result": "VALIDATED|UNCERTAIN|INCORRECT",
+  "confidence_score": 0.0-1.0,
+  "reasoning": "detailed rationale; note conflicts if any",
+  "citations": [
+    {{
+      "document": "filename",
+      "page": page_number,
+      "quote": "exact quote from source",
+      "relevance": "how this evidence relates to the claim"
+    }}
+  ]
+}}
+Rules:
+- VALIDATED or UNCERTAIN requires at least one citation; otherwise set INCORRECT.
+- Use multiple citations if needed to show support and conflicts.""")
         ])
 
     async def verify_sentence(
@@ -74,7 +82,7 @@ Provide your response in the following JSON format:
         sentence: str,
         project_id: UUID,
         context: str = "",
-        top_k: int = 5
+        top_k: Optional[int] = None
     ) -> Dict:
         """
         Verify a single sentence against supporting documents.
@@ -89,15 +97,38 @@ Provide your response in the following JSON format:
             Verification result with citations
         """
         try:
-            # Retrieve similar chunks from vector store
-            similar_chunks = vector_store.search_similar(
+            # Retrieve semantic + keyword (hybrid) chunks from vector store
+            candidate_limit = max(settings.RERANK_CANDIDATES, settings.SEMANTIC_TOP_K)
+            semantic_chunks = await vector_store.search_similar(
                 project_id=project_id,
                 query=sentence,
-                limit=top_k,
+                limit=candidate_limit,
                 min_similarity=settings.MIN_SIMILARITY_THRESHOLD
             )
 
-            if not similar_chunks:
+            hybrid_chunks = await vector_store.search_hybrid(
+                project_id=project_id,
+                query=sentence,
+                limit=settings.KEYWORD_TOP_K,
+                alpha=settings.HYBRID_ALPHA
+            )
+
+            # Merge and deduplicate by chunk_id/content hash
+            merged = []
+            seen = set()
+            for chunk in semantic_chunks + hybrid_chunks:
+                key = chunk.get("chunk_id") or hash(chunk["content"])
+                if key in seen:
+                    continue
+                seen.add(key)
+                merged.append(chunk)
+
+            # Rerank top candidates using embedding similarity (cross-encoder surrogate)
+            reranked = await self._rerank_chunks(sentence, merged)
+            final_top_k = top_k or settings.RERANK_TOP_K
+            merged = reranked[: final_top_k]
+
+            if not merged:
                 logger.warning(f"No similar evidence found for sentence: {sentence[:100]}...")
                 return {
                     "validation_result": ValidationResult.UNCERTAIN,
@@ -107,7 +138,7 @@ Provide your response in the following JSON format:
                 }
 
             # Format evidence for the prompt
-            evidence_text = self._format_evidence(similar_chunks)
+            evidence_text = self._format_evidence(merged)
 
             # Create prompt
             messages = self.verification_prompt.format_messages(
@@ -146,10 +177,12 @@ Provide your response in the following JSON format:
 
         for idx, chunk in enumerate(chunks, 1):
             evidence_parts.append(
-                f"Evidence {idx} (Similarity: {chunk['similarity']:.2f}):\n"
-                f"Source: {chunk['filename']}\n"
-                f"Page: {chunk.get('page_number', 'N/A')}\n"
-                f"Content: {chunk['content']}\n"
+                f"# Evidence {idx}\n"
+                f"- similarity: {chunk['similarity']:.2f}\n"
+                f"- file: {chunk.get('filename','unknown')}\n"
+                f"- page: {chunk.get('page_number', 'N/A')}\n"
+                f"- chunk_id: {chunk.get('chunk_id','')}\n"
+                f"## content:\n{chunk['content']}\n"
             )
 
         return "\n".join(evidence_parts)
@@ -233,6 +266,66 @@ Provide your response in the following JSON format:
                 "reasoning": response,
                 "citations": []
             }
+
+    async def _rerank_chunks(self, query: str, chunks: List[Dict]) -> List[Dict]:
+        """
+        Rerank candidates. Prefer Cohere Rerank if configured; fallback to embedding cosine.
+        """
+        if not chunks:
+            return []
+
+        try:
+            # Cohere rerank path (v2 API)
+            if settings.COHERE_API_KEY and cohere:
+                client = ClientV2(api_key=settings.COHERE_API_KEY)
+                docs = [c["content"] for c in chunks]
+                rerank_res = client.rerank(
+                    model=settings.COHERE_RERANK_MODEL or "rerank-v3.5",
+                    query=query,
+                    documents=docs,
+                    top_n=min(len(chunks), settings.RERANK_CANDIDATES),
+                )
+                ranked = []
+                for r in rerank_res.results:
+                    chunk = chunks[r.index]
+                    chunk["similarity"] = max(chunk.get("similarity", 0), r.relevance_score)
+                    ranked.append(chunk)
+            else:
+                # Fallback: embedding cosine
+                query_vec = await embedding_service.embed_text(query)
+                texts = [c["content"] for c in chunks]
+                chunk_vecs = await embedding_service.embed_batch(texts)
+
+                def cosine(a, b):
+                    import math
+                    dot = sum(x*y for x, y in zip(a, b))
+                    na = math.sqrt(sum(x*x for x in a))
+                    nb = math.sqrt(sum(x*x for x in b))
+                    return dot / (na * nb + 1e-12)
+
+                scored = []
+                for chunk, vec in zip(chunks, chunk_vecs):
+                    sim = cosine(query_vec, vec)
+                    chunk["similarity"] = max(chunk.get("similarity", 0), sim)
+                    scored.append((sim, chunk, vec))
+
+                scored.sort(key=lambda t: t[0], reverse=True)
+                ranked = [c for _, c, _ in scored]
+
+            # Deduplicate near-duplicates (>0.97) by content
+            deduped = []
+            seen = set()
+            for c in ranked:
+                key = hash(c["content"])
+                if key in seen:
+                    continue
+                seen.add(key)
+                deduped.append(c)
+
+            return deduped
+        except Exception as e:
+            logger.error(f"Rerank failed: {e}")
+            return chunks
 
     def _find_matching_chunk(self, citation: Dict, chunks: List[Dict]) -> Dict:
         """

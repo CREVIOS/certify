@@ -11,6 +11,7 @@ interface LeftSidebarProps {
   isAnalyzing?: boolean;
   hasIpoDoc?: boolean;
   indexingProgress?: number;
+  pendingCount?: number;
 }
 
 const getIcon = (type: string, name: string) => {
@@ -27,7 +28,7 @@ const getIcon = (type: string, name: string) => {
   }
 };
 
-const LeftSidebar: React.FC<LeftSidebarProps> = ({ documents, onUpload, onRunAudit, isAnalyzing = false, hasIpoDoc = false, indexingProgress = 0 }) => {
+const LeftSidebar: React.FC<LeftSidebarProps> = ({ documents, onUpload, onRunAudit, isAnalyzing = false, hasIpoDoc = false, indexingProgress = 0, pendingCount = 0 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -163,11 +164,14 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({ documents, onUpload, onRunAud
           accept=".txt,.json,.md,.csv,.pdf" 
           onChange={handleFileChange}
         />
+        <div className="mb-2 text-[11px] text-slate-500">
+          {pendingCount > 0 ? `Indexing ${pendingCount} supporting document(s) — verification locked` : 'All supporting documents indexed'}
+        </div>
         <button 
           onClick={onRunAudit}
-          disabled={isAnalyzing || !hasIpoDoc}
+          disabled={isAnalyzing || !hasIpoDoc || pendingCount > 0}
           className={`w-full flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold transition-all duration-200 shadow-sm
-            ${(isAnalyzing || !hasIpoDoc) 
+            ${(isAnalyzing || !hasIpoDoc || pendingCount > 0) 
               ? 'bg-slate-100 text-slate-600 border border-slate-200 cursor-not-allowed shadow-none' 
               : 'bg-indigo-600 text-white hover:bg-indigo-700 hover:shadow-indigo-500/25 border border-transparent'}
           `}

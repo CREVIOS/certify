@@ -201,41 +201,30 @@ class VectorStoreService:
         self,
         project_id: UUID,
         query: str,
-        limit: int = 5,
-        min_similarity: float = 0.7
+        limit: int = None,
+        min_similarity: float = None
     ) -> List[Dict]:
         """
-        Search for similar chunks using semantic search with OpenAI embeddings.
-
-        Args:
-            project_id: Project UUID
-            query: Search query
-            limit: Maximum number of results
-            min_similarity: Minimum similarity threshold
-
-        Returns:
-            List of similar chunks with metadata
+        Semantic search using embeddings (top-k up to 20-30 as requested).
         """
         try:
+            limit = limit or settings.SEMANTIC_TOP_K
+            min_similarity = min_similarity or settings.MIN_SIMILARITY_THRESHOLD
+
             collection_name = f"Project_{str(project_id).replace('-', '_')}"
             collection = self.client.collections.get(collection_name)
 
-            # Generate query embedding using OpenAI
             query_vector = await self.embed_text(query)
 
-            # Perform vector search
             response = collection.query.near_vector(
                 near_vector=query_vector,
                 limit=limit,
                 return_metadata=MetadataQuery(distance=True)
             )
 
-            # Process results
             results = []
             for obj in response.objects:
-                # Convert distance to similarity (cosine distance to similarity)
                 similarity = 1 - obj.metadata.distance
-
                 if similarity >= min_similarity:
                     results.append({
                         "content": obj.properties["content"],
@@ -246,14 +235,65 @@ class VectorStoreService:
                         "end_char": obj.properties.get("end_char"),
                         "filename": obj.properties.get("filename"),
                         "document_type": obj.properties.get("document_type"),
-                        "similarity": similarity
+                        "similarity": similarity,
+                        "source": "semantic"
                     })
 
-            logger.info(f"Found {len(results)} similar chunks for query")
+            logger.info(f"Found {len(results)} semantic chunks for query")
             return results
 
         except Exception as e:
             logger.error(f"Error searching similar chunks: {e}")
+            raise
+
+    async def search_hybrid(
+        self,
+        project_id: UUID,
+        query: str,
+        limit: int = None,
+        alpha: float = None
+    ) -> List[Dict]:
+        """
+        Hybrid keyword + semantic search. Uses Weaviate hybrid search to capture exact
+        keyword matches after retrieving semantic top-k.
+        """
+        try:
+            limit = limit or settings.KEYWORD_TOP_K
+            alpha = alpha or settings.HYBRID_ALPHA
+
+            collection_name = f"Project_{str(project_id).replace('-', '_')}"
+            collection = self.client.collections.get(collection_name)
+
+            query_vector = await self.embed_text(query)
+
+            response = collection.query.hybrid(
+                query=query,
+                vector=query_vector,
+                alpha=alpha,
+                limit=limit,
+                return_metadata=MetadataQuery(distance=True)
+            )
+
+            hybrid_results = []
+            for obj in response.objects:
+                similarity = 1 - obj.metadata.distance
+                hybrid_results.append({
+                    "content": obj.properties["content"],
+                    "document_id": obj.properties["document_id"],
+                    "chunk_id": obj.properties.get("chunk_id"),
+                    "page_number": obj.properties.get("page_number"),
+                    "start_char": obj.properties.get("start_char"),
+                    "end_char": obj.properties.get("end_char"),
+                    "filename": obj.properties.get("filename"),
+                    "document_type": obj.properties.get("document_type"),
+                    "similarity": similarity,
+                    "source": "hybrid"
+                })
+
+            logger.info(f"Found {len(hybrid_results)} hybrid chunks for query")
+            return hybrid_results
+        except Exception as e:
+            logger.error(f"Error running hybrid search: {e}")
             raise
 
     def delete_document_chunks(self, project_id: UUID, document_id: UUID):
