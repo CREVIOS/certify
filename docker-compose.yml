@@ -1,0 +1,152 @@
+version: '3.8'
+
+services:
+  # Redis - Caching and Session Store
+  redis:
+    image: redis:7-alpine
+    container_name: ipo_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - ipo_network
+
+  # RabbitMQ - Message Broker for Celery
+  rabbitmq:
+    image: rabbitmq:3.12-management-alpine
+    container_name: ipo_rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: admin
+      RABBITMQ_DEFAULT_PASS: rabbitmq_password
+      RABBITMQ_DEFAULT_VHOST: ipo_vhost
+    ports:
+      - "5672:5672"   # AMQP
+      - "15672:15672" # Management UI
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - ipo_network
+
+  # Weaviate - Vector Database
+  weaviate:
+    image: cr.weaviate.io/semitechnologies/weaviate:1.34.0
+    container_name: ipo_weaviate
+    restart: on-failure:0
+    command:
+    - --host
+    - 0.0.0.0
+    - --port
+    - '8080'
+    - --scheme
+    - http
+    environment:
+      QUERY_DEFAULTS_LIMIT: 25
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: 'true'
+      PERSISTENCE_DATA_PATH: '/var/lib/weaviate'
+      CLUSTER_HOSTNAME: 'node1'
+    ports:
+      - "8080:8080"
+      - "50051:50051"
+    volumes:
+      - weaviate_data:/var/lib/weaviate
+    networks:
+      - ipo_network
+
+  # Celery Worker - Background Task Processing
+  celery_worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: ipo_celery_worker
+    restart: unless-stopped
+    command: celery -A app.tasks.celery_app worker --loglevel=info --concurrency=4
+    env_file:
+      - ./backend/.env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=amqp://admin:rabbitmq_password@rabbitmq:5672/ipo_vhost
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - WEAVIATE_URL=http://weaviate:8080
+    depends_on:
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      weaviate:
+        condition: service_started
+    volumes:
+      - ./backend:/app
+      - celery_data:/app/data
+    networks:
+      - ipo_network
+
+  # Celery Beat - Periodic Task Scheduler
+  celery_beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: ipo_celery_beat
+    restart: unless-stopped
+    command: celery -A app.tasks.celery_app beat --loglevel=info
+    env_file:
+      - ./backend/.env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=amqp://admin:rabbitmq_password@rabbitmq:5672/ipo_vhost
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+    depends_on:
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+    networks:
+      - ipo_network
+
+  # Flower - Celery Monitoring
+  flower:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: ipo_flower
+    restart: unless-stopped
+    command: celery -A app.tasks.celery_app flower --port=5555
+    environment:
+      - CELERY_BROKER_URL=amqp://admin:rabbitmq_password@rabbitmq:5672/ipo_vhost
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+    ports:
+      - "5555:5555"
+    depends_on:
+      - rabbitmq
+      - redis
+    networks:
+      - ipo_network
+
+volumes:
+  redis_data:
+    driver: local
+  rabbitmq_data:
+    driver: local
+  weaviate_data:
+    driver: local
+  celery_data:
+    driver: local
+
+networks:
+  ipo_network:
+    driver: bridge
