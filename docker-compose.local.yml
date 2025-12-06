@@ -1,0 +1,62 @@
+# version: '3.8'
+
+# Simplified Docker Compose for local development
+# Uses Supabase for PostgreSQL, only runs essential local services
+
+services:
+  # Weaviate - Vector Database
+  weaviate:
+    image: cr.weaviate.io/semitechnologies/weaviate:1.34.0
+    container_name: ipo_weaviate
+    restart: on-failure:0
+    command:
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+      - --scheme
+      - http
+    environment:
+      QUERY_DEFAULTS_LIMIT: 25
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: "true"
+      PERSISTENCE_DATA_PATH: "/var/lib/weaviate"
+      CLUSTER_HOSTNAME: "node1"
+    ports:
+      - "8080:8080"
+      - "50051:50051"
+    volumes:
+      - weaviate_data:/var/lib/weaviate
+
+  # Redis - Caching and Session Store
+  redis:
+    image: redis:7-alpine
+    container_name: ipo_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+
+  # RabbitMQ - Message Broker for Celery
+  rabbitmq:
+    image: rabbitmq:3.12-management-alpine
+    container_name: ipo_rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: admin
+      RABBITMQ_DEFAULT_PASS: rabbitmq_password
+      RABBITMQ_DEFAULT_VHOST: ipo_vhost
+    ports:
+      - "5672:5672" # AMQP
+      - "15672:15672" # Management UI
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+
+volumes:
+  weaviate_data:
+    driver: local
+  redis_data:
+    driver: local
+  rabbitmq_data:
+    driver: local
